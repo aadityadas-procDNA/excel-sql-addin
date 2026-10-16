@@ -37,7 +37,9 @@ Not sure what to call some cells? Tick **Pick from sheet** above the editor, the
 - A cell inside a named range, or a selection that matches one exactly, gives the name: `Targets`.
 - A single cell in loose data expands to its block, like Ctrl+A, and gives `[Sheet1!B2:F40]`. If that block is all the data on the sheet, `[Sheet1]` is offered first.
 - Any other selection gives its range, clipped to the data: `[Sheet1!A1:D200]`.
-- A header cell also offers that column's name, e.g. `[Unit Price]`.
+- Inside a table, a selection that starts at the header row also offers its exact range, e.g. `[Sheet1!A1:B40]`. Other partial selections don't, because their first row would become the column names.
+- The selected columns are offered as a list, e.g. `CustomerId, Name`, for SELECT.
+- A single data cell is offered as a SQL value, e.g. `'C02'`, `1500` or `'2026-01-31'`, for WHERE.
 
 ## Example (sample.xlsx)
 

@@ -4,7 +4,9 @@
 // Reference mode: select cells in the sheet, see which SQL reference they correspond to, insert it into the editor.
 const REF_DEBOUNCE_MS = 250;
 const REF_MAX_NAMES = 500;
-const REF_KIND_LABEL = { table: "table", name: "named range", sheet: "whole sheet", range: "range", column: "column" };
+const REF_KIND_LABEL = {
+  table: "table", name: "named range", sheet: "whole sheet", range: "range", column: "column", columns: "columns", value: "value",
+};
 
 const REF_POLL_MS = 1000;
 
@@ -115,14 +117,19 @@ async function readSelectionRef() {
     }
 
     let headers = [];
+    let cell = null;
     if (pick.block) {
       const b = pick.block;
       const head = ws.getRangeByIndexes(b.r1, b.c1, 1, b.c2 - b.c1 + 1).load("values");
+      const one = sel.rowCount === 1 && sel.columnCount === 1
+        ? ws.getRangeByIndexes(sel.rowIndex, sel.columnIndex, 1, 1).load("values,numberFormat")
+        : null;
       await ctx.sync();
       headers = head.values[0];
+      if (one) cell = { value: one.values[0][0], format: one.numberFormat[0][0] };
     }
     const taken = info.tableNames.concat(rangeNames.map((n) => n.name.toLowerCase()));
-    return { address: sel.address, ...SqlCore.referenceCandidates(info, pick, headers, taken) };
+    return { address: sel.address, ...SqlCore.referenceCandidates(info, pick, headers, taken, cell) };
   });
 }
 
@@ -141,15 +148,18 @@ function renderRefBar(info) {
 
   const best = info.candidates.find((c) => c.kind !== "column");
   const shown = info.columns.slice(0, 6).join(", ") + (info.columns.length > 6 ? `, … (${info.columns.length})` : "");
+  const selected = info.address.slice(info.address.lastIndexOf("!") + 1);
   text.replaceChildren(
+    `${selected} → in `,
     el("b", { textContent: best.label }),
     ` (${REF_KIND_LABEL[best.kind]}) · ${Math.max(info.rows, 0).toLocaleString()} rows · ${shown}`
   );
+  const prefix = { column: "column ", columns: "columns ", value: "value " };
   info.candidates.forEach((c, i) => {
     buttons.append(
       el("button", {
         className: i === 0 ? "primary" : "",
-        textContent: c.kind === "column" ? `Insert column ${c.text}` : `Insert ${c.text}`,
+        textContent: `Insert ${prefix[c.kind] || ""}${c.text}`,
         title: `Insert the ${REF_KIND_LABEL[c.kind]} reference at the editor cursor`,
         onclick: () => insertAtCursor(c.text),
       })

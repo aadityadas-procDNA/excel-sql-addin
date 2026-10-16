@@ -430,15 +430,31 @@
     return { block: info.region };
   }
 
+  // SQL literal for a cell value, matching how the cell is loaded (dates become ISO text).
+  function sqlLiteral(value, format) {
+    if (!filled(value)) return null;
+    if (typeof value === "boolean") return value ? "1" : "0";
+    if (typeof value === "number") return isDateFormat(format) ? "'" + serialToIso(value) + "'" : String(value);
+    return "'" + String(value).replace(/'/g, "''") + "'";
+  }
+
   // Lists the SQL references for a picked block, best first. headers: values of the block's first row.
   // taken: lower-cased names of all tables and named ranges (a sheet with such a name can't be referenced by name).
-  function referenceCandidates(info, pick, headers, taken) {
+  // cell: { value, format } of a single selected cell, offered as a literal for WHERE clauses.
+  function referenceCandidates(info, pick, headers, taken, cell) {
     const block = pick.block;
     if (!block) return { block: null, candidates: [], columns: [] };
     const columns = normalizeHeaders(headers || []);
+    const { sel } = info;
+    const single = sel.r1 === sel.r2 && sel.c1 === sel.c2;
     const out = [];
     if (pick.table) {
       out.push({ kind: "table", label: pick.table.name, text: quoteRef(pick.table.name) });
+      // Part of a table that starts at its header row is still a valid source with column names.
+      if (!single && sel.r1 === block.r1 && !sameBounds(sel, block)) {
+        const address = `${info.sheet}!${toA1(sel)}`;
+        out.push({ kind: "range", label: address, text: `[${address}]` });
+      }
     } else {
       if (pick.name) out.push({ kind: "name", label: pick.name.name, text: quoteRef(pick.name.name) });
       if (info.used && sameBounds(block, info.used) && !(taken || []).includes(info.sheet.toLowerCase())) {
@@ -447,11 +463,16 @@
       const address = `${info.sheet}!${toA1(block)}`;
       out.push({ kind: "range", label: address, text: `[${address}]` });
     }
-    const { sel } = info;
-    const single = sel.r1 === sel.r2 && sel.c1 === sel.c2;
-    if (single && sel.r1 === block.r1 && block.r2 > block.r1 && columns[sel.c1 - block.c1] !== undefined) {
-      const col = columns[sel.c1 - block.c1];
-      out.push({ kind: "column", label: col, text: quoteRef(col) });
+    // Names of the selected columns (all of them only when it's a single column: otherwise that's just "*").
+    const c1 = Math.max(sel.c1, block.c1);
+    const c2 = Math.min(sel.c2, block.c2);
+    const picked = columns.slice(c1 - block.c1, c2 - block.c1 + 1);
+    if (block.r2 > block.r1 && picked.length && (picked.length === 1 || picked.length < columns.length)) {
+      out.push({ kind: picked.length === 1 ? "column" : "columns", label: picked.join(", "), text: picked.map(quoteRef).join(", ") });
+    }
+    if (single && sel.r1 > block.r1 && cell) {
+      const literal = sqlLiteral(cell.value, cell.format);
+      if (literal !== null) out.push({ kind: "value", label: literal, text: literal });
     }
     return { block, candidates: out, columns, rows: block.r2 - block.r1 };
   }
@@ -503,6 +524,7 @@
     currentRegion,
     pickReferenceBlock,
     referenceCandidates,
+    sqlLiteral,
     buildJoinSql,
     guessJoinKey,
     extractIdentifiers,

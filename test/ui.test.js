@@ -197,8 +197,8 @@ async function boot(wb) {
   assert.strictEqual(ui.$("refBar").hidden, false);
 
   await pick("Orders", "B3");
-  assert.deepStrictEqual(refButtons(), ["Insert Orders"], refInfo());
-  assert.match(refInfo(), /^Orders \(table\) · 5 rows · OrderId, OrderDate/);
+  assert.deepStrictEqual(refButtons(), ["Insert Orders", "Insert column OrderDate", "Insert value '2026-01-02'"], refInfo());
+  assert.match(refInfo(), /^B3 → in Orders \(table\) · 5 rows · OrderId, OrderDate/);
   const ta = ui.$("sql");
   ta.value = "SELECT * FROM";
   ta.setSelectionRange(13, 13);
@@ -214,15 +214,20 @@ async function boot(wb) {
   assert.strictEqual(ta.value, "SELECT CustomerId FROM Orders");
   step("reference mode: header cell offers the column name");
 
+  await pick("Customers", "A3:C4");
+  assert.deepStrictEqual(refButtons(), ["Insert Customers", "Insert columns CustomerId, Name, Region"], refInfo());
+  assert.match(refInfo(), /^A3:C4 → in Customers \(table\)/);
+  step("reference mode: part of a table -> table plus the selected columns");
+
   await pick("Customers", "G3");
-  assert.deepStrictEqual(refButtons(), ["Insert Targets", "Insert [Customers!F1:G4]"], refInfo());
+  assert.deepStrictEqual(refButtons(), ["Insert Targets", "Insert [Customers!F1:G4]", "Insert column Target", "Insert value 5"], refInfo());
   step("reference mode: cell inside a named range -> named range");
 
   const raw = wb.addSheet("Raw Data");
   raw.write("B2", [["Region", "Amount"], ["N", 1], ["S", 2]]);
   raw.write("F10", [["note"]]);
   await pick("Raw Data", "C3");
-  assert.deepStrictEqual(refButtons(), ["Insert [Raw Data!B2:C4]"], refInfo());
+  assert.deepStrictEqual(refButtons(), ["Insert [Raw Data!B2:C4]", "Insert column Amount", "Insert value 1"], refInfo());
   assert.match(refInfo(), /2 rows · Region, Amount/);
   await pick("Raw Data", "B2");
   assert.deepStrictEqual(refButtons(), ["Insert [Raw Data!B2:C4]", "Insert column Region"], refInfo());
@@ -239,7 +244,7 @@ async function boot(wb) {
   wb.selection = wb.worksheets.getItem("Orders").getRange("A4");
   await sleep(1300);
   await ui.idle();
-  assert.deepStrictEqual(refButtons(), ["Insert Orders"], refInfo());
+  assert.deepStrictEqual(refButtons(), ["Insert Orders", "Insert column OrderId", "Insert value 3"], refInfo());
   step("reference mode: selection change without an event is picked up by the poll");
 
   ui.$("refMode").checked = false;

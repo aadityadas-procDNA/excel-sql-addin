@@ -210,7 +210,15 @@ test("parseNameFormula", () => {
   assert.strictEqual(S.toA1({ r1: 0, c1: 0, r2: 8, c2: 27 }), "A1:AB9");
 });
 
-test("reference choice: table, named range, sheet, range, column", () => {
+test("sqlLiteral", () => {
+  assert.strictEqual(S.sqlLiteral(12.5, "General"), "12.5");
+  assert.strictEqual(S.sqlLiteral(true), "1");
+  assert.strictEqual(S.sqlLiteral("O'Neil", "@"), "'O''Neil'");
+  assert.strictEqual(S.sqlLiteral(46023.5, "yyyy-mm-dd hh:mm"), "'2026-01-01 12:00:00'");
+  assert.strictEqual(S.sqlLiteral("", "General"), null);
+});
+
+test("reference choice: table, named range, sheet, range, columns, value", () => {
   const B = (a) => S.parseAddress(a)[0];
   const base = {
     sheet: "Data 1",
@@ -222,20 +230,24 @@ test("reference choice: table, named range, sheet, range, column", () => {
       { name: "Customers", sheet: "Data 1", bounds: B("H1:H3") }, // shadowed by a table
     ],
   };
-  const choose = (sel, region, headers = ["Id", "", "Id"]) => {
+  const choose = (sel, region, headers = ["Id", "", "Id"], cell) => {
     const info = { ...base, sel: B(sel), region };
     const pick = S.pickReferenceBlock(info);
-    return pick.needsRegion ? pick : S.referenceCandidates(info, pick, headers, ["orders", "customers", "rates"]);
+    return pick.needsRegion ? pick : S.referenceCandidates(info, pick, headers, ["orders", "customers", "rates"], cell);
   };
   const texts = (r) => r.candidates.map((c) => `${c.kind}:${c.text}`);
 
-  assert.deepStrictEqual(texts(choose("B5")), ["table:Orders"]);
-  assert.deepStrictEqual(texts(choose("A2:B4")), ["table:Orders"]);
+  assert.deepStrictEqual(texts(choose("B5")), ["table:Orders", "column:Column2"]);
+  assert.deepStrictEqual(texts(choose("B5", undefined, undefined, { value: "C'02", format: "General" })), ["table:Orders", "column:Column2", "value:'C''02'"]);
+  assert.deepStrictEqual(texts(choose("A5", undefined, undefined, { value: 46023, format: "dd-mmm-yy" })), ["table:Orders", "column:Id", "value:'2026-01-01'"]);
+  assert.deepStrictEqual(texts(choose("A2:B4")), ["table:Orders", "columns:Id, Column2"]);
+  assert.deepStrictEqual(texts(choose("A1:B4")), ["table:Orders", "range:[Data 1!A1:B4]", "columns:Id, Column2"]);
+  assert.deepStrictEqual(texts(choose("A1:C10")), ["table:Orders"]);
   assert.deepStrictEqual(texts(choose("C1")), ["table:Orders", "column:Id_2"]);
-  assert.deepStrictEqual(texts(choose("F2")), ["name:Rates", "range:[Data 1!E1:F5]"]);
-  assert.deepStrictEqual(texts(choose("E1:F5")), ["name:Rates", "range:[Data 1!E1:F5]"]);
+  assert.deepStrictEqual(texts(choose("F2", undefined, ["Rate", "Value"])), ["name:Rates", "range:[Data 1!E1:F5]", "column:Value"]);
+  assert.deepStrictEqual(texts(choose("E1:F5", undefined, ["Rate", "Value"])), ["name:Rates", "range:[Data 1!E1:F5]"]);
   assert.deepStrictEqual(choose("H2"), { needsRegion: true }, "named range shadowed by a table name is skipped");
-  assert.deepStrictEqual(texts(choose("H2", B("H1:J20"))), ["range:[Data 1!H1:J20]"]);
+  assert.deepStrictEqual(texts(choose("H2", B("H1:J20"))), ["range:[Data 1!H1:J20]", "column:Id"]);
   assert.deepStrictEqual(texts(choose("A1:Z99")), ["sheet:[Data 1]", "range:[Data 1!A1:J20]"]);
   assert.deepStrictEqual(texts(choose("H1", B("H1:I4"), ["Region", "Target"])), ["range:[Data 1!H1:I4]", "column:Region"]);
   assert.deepStrictEqual(choose("Z50", null).candidates, []);
