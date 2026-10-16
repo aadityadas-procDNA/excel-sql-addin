@@ -235,6 +235,13 @@ async function boot(wb) {
   assert.match(refInfo(), /single block/);
   step("reference mode: loose data -> its block as a range, whole sheet, empty cell and multi-area handled");
 
+  // Some Excel builds never deliver the selection event: the poll must still pick the change up.
+  wb.selection = wb.worksheets.getItem("Orders").getRange("A4");
+  await sleep(1300);
+  await ui.idle();
+  assert.deepStrictEqual(refButtons(), ["Insert Orders"], refInfo());
+  step("reference mode: selection change without an event is picked up by the poll");
+
   ui.$("refMode").checked = false;
   ui.$("refMode").dispatchEvent(new ui.w.Event("change"));
   await ui.idle();

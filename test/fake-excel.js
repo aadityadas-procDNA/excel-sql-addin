@@ -233,6 +233,7 @@ function makeOffice(wb) {
   const Office = {
     HostType: { Excel: "Excel" },
     AsyncResultStatus: { Succeeded: "succeeded" },
+    EventType: { DocumentSelectionChanged: "documentSelectionChanged" },
     StartupBehavior: { load: "Load", none: "None" },
     startup: null,
     onReady(cb) { ready = cb; },
@@ -241,6 +242,15 @@ function makeOffice(wb) {
     context: {
       requirements: { isSetSupported: () => true },
       document: {
+        addHandlerAsync(type, handler, cb) {
+          if (type === "documentSelectionChanged") wb.selectionHandlers.push(handler);
+          if (cb) cb({ status: "succeeded" });
+        },
+        removeHandlerAsync(type, options, cb) {
+          const i = wb.selectionHandlers.indexOf(options.handler);
+          if (i >= 0) wb.selectionHandlers.splice(i, 1);
+          if (cb) cb({ status: "succeeded" });
+        },
         settings: {
           get: (k) => (settings.has(k) ? JSON.parse(settings.get(k)) : null),
           set: (k, v) => settings.set(k, JSON.stringify(v)),

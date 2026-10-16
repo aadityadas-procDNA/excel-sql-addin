@@ -1,4 +1,4 @@
-/* global Excel, SqlCore, $, el, setStatus, errorText, insertAtCursor */
+/* global Office, Excel, SqlCore, $, el, busyCount, setStatus, errorText, insertAtCursor */
 "use strict";
 
 // Reference mode: select cells in the sheet, see which SQL reference they correspond to, insert it into the editor.
@@ -6,7 +6,10 @@ const REF_DEBOUNCE_MS = 250;
 const REF_MAX_NAMES = 500;
 const REF_KIND_LABEL = { table: "table", name: "named range", sheet: "whole sheet", range: "range", column: "column" };
 
-const ref = { handler: null, timer: null, seq: 0 };
+const REF_POLL_MS = 1000;
+
+// Selection events don't reach the pane in every Excel build, so a light poll of the selection address backs them up.
+const ref = { on: false, timer: null, poll: null, seq: 0, lastAddress: null, checking: false };
 
 function initRefMode() {
   const box = $("refMode");
@@ -22,26 +25,43 @@ function initRefMode() {
 async function setRefMode(on) {
   try { localStorage.setItem("sqlRefMode", on ? "1" : "0"); } catch (e) { /* ignore */ }
   $("refBar").hidden = !on;
-  if (on && !ref.handler) {
-    await Excel.run(async (ctx) => {
-      ref.handler = ctx.workbook.onSelectionChanged.add(onRefSelection);
-      await ctx.sync();
+  if (on === ref.on) return;
+  ref.on = on;
+  const doc = Office.context.document;
+  const type = Office.EventType.DocumentSelectionChanged;
+  if (on) {
+    doc.addHandlerAsync(type, onRefSelection, (r) => {
+      if (r.status !== Office.AsyncResultStatus.Succeeded) console.warn("Selection event unavailable; polling only", r.error);
     });
+    ref.poll = setInterval(pollSelection, REF_POLL_MS);
     await updateRefPreview();
-  } else if (!on && ref.handler) {
+  } else {
     clearTimeout(ref.timer);
-    const h = ref.handler;
-    ref.handler = null;
-    await Excel.run(h.context, async (ctx) => {
-      h.remove();
-      await ctx.sync();
-    });
+    clearInterval(ref.poll);
+    ref.lastAddress = null;
+    doc.removeHandlerAsync(type, { handler: onRefSelection }, () => {});
   }
 }
 
 function onRefSelection() {
   clearTimeout(ref.timer);
   ref.timer = setTimeout(updateRefPreview, REF_DEBOUNCE_MS);
+}
+
+// Re-reads the preview when the selection moved without an event arriving.
+async function pollSelection() {
+  if (!ref.on || ref.checking || busyCount > 0 || document.hidden) return;
+  ref.checking = true;
+  try {
+    const address = await Excel.run(async (ctx) => {
+      const sel = ctx.workbook.getSelectedRange().load("address");
+      await ctx.sync();
+      return sel.address;
+    }).catch(() => "(multiple areas)");
+    if (ref.on && address !== ref.lastAddress) await updateRefPreview();
+  } finally {
+    ref.checking = false;
+  }
 }
 
 async function updateRefPreview() {
@@ -51,9 +71,10 @@ async function updateRefPreview() {
     info = await readSelectionRef();
   } catch (e) {
     const msg = errorText(e);
-    info = { message: /multiple|areas/i.test(msg) ? "Select a single block of cells." : msg };
+    info = { address: "(multiple areas)", message: /multiple|areas/i.test(msg) ? "Select a single block of cells." : msg };
   }
-  if (seq !== ref.seq || !ref.handler) return; // a newer selection is being read, or the mode was turned off
+  if (seq !== ref.seq || !ref.on) return; // a newer selection is being read, or the mode was turned off
+  ref.lastAddress = info.address;
   renderRefBar(info);
 }
 
