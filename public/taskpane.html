@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SQL Query</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <script src="vendor/sql-wasm.js"></script>
+  <script src="sqlcore.js"></script>
+  <link rel="stylesheet" href="taskpane.css">
+</head>
+<body>
+  <main>
+    <section class="editor">
+      <div class="toolbar">
+        <button id="run" class="primary" title="Run (Ctrl+Enter). Runs only the selected text if any.">&#9654; Run</button>
+        <button id="saveBtn" title="Save this query in the workbook">Save</button>
+        <button id="clearBtn" title="Clear editor">Clear</button>
+        <span class="spacer"></span>
+        <span class="muted small">Ctrl+Enter</span>
+      </div>
+      <textarea id="sql" spellcheck="false" autocomplete="off"
+        placeholder="SELECT * FROM Table1 LIMIT 100&#10;&#10;Click an object below to insert its name."></textarea>
+      <div id="saveRow" class="toolbar" hidden>
+        <input id="saveName" placeholder="Query name">
+        <button id="saveOk" class="primary">Save</button>
+        <button id="saveCancel">Cancel</button>
+      </div>
+    </section>
+
+    <div id="status" class="status" role="status"></div>
+
+    <section id="resultSection" hidden>
+      <div class="toolbar wrap">
+        <span class="muted small">Insert:</span>
+        <button id="toSheet">New sheet</button>
+        <button id="toCell">At selected cell</button>
+        <label class="small"><input type="checkbox" id="asTable" checked> Refreshable table</label>
+      </div>
+      <div class="grid-wrap"><table id="grid"></table></div>
+      <div id="gridNote" class="muted small"></div>
+    </section>
+
+    <details open>
+      <summary>Workbook objects <button id="refreshObjects" class="icon" title="Refresh">&#10227;</button></summary>
+      <input id="filter" class="filter" placeholder="Filter tables, ranges, sheets, columns">
+      <ul id="objects" class="tree"></ul>
+    </details>
+
+    <details>
+      <summary>Saved queries <span id="savedCount" class="badge"></span></summary>
+      <ul id="saved" class="list"></ul>
+    </details>
+
+    <details>
+      <summary>Query tables <span id="linkedCount" class="badge"></span></summary>
+      <p class="muted small">Tables inserted with “Refreshable table” remember their query. Refresh re-runs it against current data.</p>
+      <div class="toolbar"><button id="refreshAll">Refresh all</button></div>
+      <ul id="linked" class="list"></ul>
+    </details>
+
+    <details>
+      <summary>Help</summary>
+      <div class="help">
+        <p>Queries run in <b>SQLite</b> against the workbook data each time you run them.</p>
+        <table>
+          <tr><td>Excel table</td><td><code>SELECT * FROM Sales</code></td></tr>
+          <tr><td>Named range</td><td><code>SELECT * FROM MyRange</code></td></tr>
+          <tr><td>Whole sheet</td><td><code>SELECT * FROM [Sheet 1]</code></td></tr>
+          <tr><td>Any range</td><td><code>SELECT * FROM [Sheet1!A1:D200]</code></td></tr>
+          <tr><td>Spaces in names</td><td><code>[Unit Price]</code> or <code>"Unit Price"</code></td></tr>
+        </table>
+        <ul>
+          <li>The first row of a range or sheet is used as column headers.</li>
+          <li>Date cells become ISO text (<code>2024-01-31</code>), so <code>date()</code>, <code>strftime()</code> and text comparisons work.</li>
+          <li>Joins, GROUP BY, CTEs (<code>WITH</code>), window functions and multiple statements are supported. The last result set is shown.</li>
+          <li>Select part of the editor text to run just that part.</li>
+          <li>TRUE/FALSE become 1/0. Empty cells become NULL.</li>
+        </ul>
+      </div>
+    </details>
+  </main>
+  <script src="taskpane.js"></script>
+</body>
+</html>
