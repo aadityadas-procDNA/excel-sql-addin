@@ -33,6 +33,8 @@
           placeholder="SELECT * FROM Table1 LIMIT 100&#10;&#10;Click an object below, or turn on “Pick from sheet” and select cells, to insert a reference."></textarea>
         <div id="refBar" class="refbar" hidden>
           <div id="refInfo" class="small">Select cells in the sheet…</div>
+          <label class="small" title="Every row is data; columns are named by their sheet letters (A, B, C…). Doesn't apply to Excel tables.">
+            <input type="checkbox" id="refNoHeader"> No header row</label>
           <div id="refButtons" class="toolbar wrap"></div>
         </div>
         <div id="saveRow" class="toolbar" hidden>
@@ -68,10 +70,11 @@
             <tr><td>Named range</td><td><code>SELECT * FROM MyRange</code></td></tr>
             <tr><td>Whole sheet</td><td><code>SELECT * FROM [Sheet 1]</code></td></tr>
             <tr><td>Any range</td><td><code>SELECT * FROM [Sheet1!A1:D200]</code></td></tr>
+            <tr><td>No header row</td><td><code>SELECT A, C FROM [Sheet1!A1:D200 noheader]</code></td></tr>
             <tr><td>Spaces in names</td><td><code>[Unit Price]</code> or <code>"Unit Price"</code></td></tr>
           </table>
           <ul>
-            <li>The first row of a range or sheet is used as column headers.</li>
+            <li>The first row of a range, sheet or named range is used as column headers. Add <code>noheader</code> inside the brackets when there is no header row: every row is then data and columns are named by their sheet letters.</li>
             <li>Date cells become ISO text (<code>2024-01-31</code>), so <code>date()</code>, <code>strftime()</code> and text comparisons work.</li>
             <li>Joins, GROUP BY, CTEs (<code>WITH</code>), window functions and multiple statements are supported. The last result set is shown.</li>
             <li>SQL <code>=</code> is case-sensitive. Add <code>COLLATE NOCASE</code> to match like XLOOKUP.</li>

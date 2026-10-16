@@ -26,6 +26,7 @@ Uninstall with `.\scripts\uninstall.ps1`.
 | Any range     | `SELECT * FROM [Sheet1!A1:D200]`      |
 
 - The first row of a range is used as the header row. Quote names that contain spaces: `[Unit Price]`.
+- **No header row?** Add `noheader` inside the brackets: `SELECT A, C FROM [Sheet1!A1:D200 noheader] WHERE C = 'North'`. Every row is then data, and columns are named by their sheet letters (a range starting at column D has columns `D`, `E`, …). It works on ranges, sheets (`[Sheet1 noheader]`) and named ranges (`[Targets noheader]`), but not on Excel tables, which always have a header row.
 - Date-formatted cells become ISO text (`2026-03-14`), so `strftime`, `date()` and text comparisons work.
 - Only the objects a query mentions are loaded, and they are read fresh on every run.
 
@@ -40,6 +41,7 @@ Not sure what to call some cells? Tick **Pick from sheet** above the editor, the
 - Inside a table, a selection that starts at the header row also offers its exact range, e.g. `[Sheet1!A1:B40]`. Other partial selections don't, because their first row would become the column names.
 - The selected columns are offered as a list, e.g. `CustomerId, Name`, for SELECT.
 - A single data cell is offered as a SQL value, e.g. `'C02'`, `1500` or `'2026-01-31'`, for WHERE.
+- Tick **No header row** for data without column names: references get `noheader` and columns are offered as letters (`B`).
 
 ## Example (sample.xlsx)
 

@@ -240,6 +240,28 @@ async function boot(wb) {
   assert.match(refInfo(), /single block/);
   step("reference mode: loose data -> its block as a range, whole sheet, empty cell and multi-area handled");
 
+  // Data without a header row.
+  raw.write("H1", [["N", 5], ["S", 7]]);
+  ui.$("refNoHeader").checked = true;
+  ui.$("refNoHeader").dispatchEvent(new ui.w.Event("change"));
+  await pick("Raw Data", "H1");
+  assert.deepStrictEqual(refButtons(), ["Insert [Raw Data!H1:I2 noheader]", "Insert column H", "Insert value 'N'"], refInfo());
+  assert.match(refInfo(), /2 rows · H, I/);
+  ta.value = "SELECT I FROM ";
+  ta.setSelectionRange(14, 14);
+  ui.doc.querySelector("#refButtons button").click();
+  ta.value += " WHERE H = 'S'";
+  ui.click("run");
+  await ui.idle();
+  assert.strictEqual(ta.value, "SELECT I FROM [Raw Data!H1:I2 noheader] WHERE H = 'S'");
+  assert.deepStrictEqual(ui.g("JSON.stringify(lastResult.values)"), "[[7]]", ui.status());
+  await pick("Orders", "B3");
+  assert.strictEqual(refButtons()[0], "Insert Orders");
+  assert.match(refInfo(), /“No header row” is ignored/);
+  ui.$("refNoHeader").checked = false;
+  ui.$("refNoHeader").dispatchEvent(new ui.w.Event("change"));
+  step("no header row: noheader reference, letter columns, first row kept as data; tables unaffected");
+
   // Some Excel builds never deliver the selection event: the poll must still pick the change up.
   wb.selection = wb.worksheets.getItem("Orders").getRange("A4");
   await sleep(1300);

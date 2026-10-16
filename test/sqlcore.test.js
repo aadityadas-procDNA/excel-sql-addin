@@ -32,6 +32,25 @@ test("resolveSources prefers tables, then names, then sheets", () => {
   );
 });
 
+test("resolveSources: noheader on ranges, sheets and names, not tables", () => {
+  const objs = [
+    { kind: "table", name: "Sales" },
+    { kind: "name", name: "Rates" },
+    { kind: "sheet", name: "Data 2024" },
+  ];
+  const src = S.resolveSources(["Sheet1!A1:B2 noheader", "Rates noheader", "Data 2024 NOHEADER", "Sales noheader", "Sheet1!A1:B2"], objs);
+  assert.deepStrictEqual(
+    src.map((s) => [s.kind, s.name, s.ref, s.noHeader]),
+    [
+      ["range", "Sheet1!A1:B2 noheader", "Sheet1!A1:B2", true],
+      ["name", "Rates noheader", "Rates", true],
+      ["sheet", "Data 2024 NOHEADER", "Data 2024", true],
+      ["range", "Sheet1!A1:B2", "Sheet1!A1:B2", false],
+    ]
+  );
+  assert.deepStrictEqual(S.letterHeaders(25, 3), ["Z", "AA", "AB"]);
+});
+
 test("splitAddress handles quoted sheet names", () => {
   assert.deepStrictEqual(S.splitAddress("'Bob''s Data'!A1:C3"), { sheet: "Bob's Data", address: "A1:C3" });
   assert.deepStrictEqual(S.splitAddress("Sheet1!A:D"), { sheet: "Sheet1", address: "A:D" });
@@ -251,6 +270,17 @@ test("reference choice: table, named range, sheet, range, columns, value", () =>
   assert.deepStrictEqual(texts(choose("A1:Z99")), ["sheet:[Data 1]", "range:[Data 1!A1:J20]"]);
   assert.deepStrictEqual(texts(choose("H1", B("H1:I4"), ["Region", "Target"])), ["range:[Data 1!H1:I4]", "column:Region"]);
   assert.deepStrictEqual(choose("Z50", null).candidates, []);
+
+  // No header row: references get "noheader", columns are sheet letters, the first row is data.
+  const chooseNoHeader = (sel, region, cell, headers = ["North", 5]) => {
+    const info = { ...base, sel: B(sel), region, noHeader: true };
+    return S.referenceCandidates(info, S.pickReferenceBlock(info), headers, ["orders", "customers", "rates"], cell);
+  };
+  const h1 = chooseNoHeader("H1", B("H1:I4"), { value: "North", format: "General" });
+  assert.deepStrictEqual(texts(h1), ["range:[Data 1!H1:I4 noheader]", "column:H", "value:'North'"]);
+  assert.deepStrictEqual([h1.columns, h1.rows], [["H", "I"], 4]);
+  assert.deepStrictEqual(texts(chooseNoHeader("F2")), ["name:[Rates noheader]", "range:[Data 1!E1:F5 noheader]", "column:F"]);
+  assert.deepStrictEqual(texts(chooseNoHeader("B5", undefined, undefined, ["Id", "", "Id"])), ["table:Orders", "column:Column2"], "tables keep their header row");
 });
 
 (async () => {

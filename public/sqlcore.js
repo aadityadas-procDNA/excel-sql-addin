@@ -60,8 +60,12 @@
     return ids;
   }
 
+  const NO_HEADER = /\s+noheader$/i;
+
   // Maps identifiers used in the SQL to workbook objects. Priority: table > named range > sheet.
   // Identifiers containing "!" are treated as range addresses, e.g. [Sheet1!A1:D50].
+  // A trailing " noheader" ([Sheet1!A1:C9 noheader]) marks a range, sheet or named range without a header row;
+  // tables always have one, so it isn't accepted on them.
   function resolveSources(ids, objects) {
     const priority = { table: 0, name: 1, sheet: 2 };
     const byLower = new Map();
@@ -73,8 +77,11 @@
     for (const id of ids) {
       const key = id.toLowerCase();
       if (!id || sources.has(key)) continue;
-      if (id.includes("!")) sources.set(key, { kind: "range", name: id, ref: id });
-      else if (byLower.has(key)) sources.set(key, { kind: byLower.get(key).kind, name: id, ref: byLower.get(key).name });
+      const noHeader = NO_HEADER.test(id);
+      const base = noHeader ? id.replace(NO_HEADER, "") : id;
+      const obj = byLower.get(base.toLowerCase());
+      if (base.includes("!")) sources.set(key, { kind: "range", name: id, ref: base, noHeader });
+      else if (obj && !(noHeader && obj.kind === "table")) sources.set(key, { kind: obj.kind, name: id, ref: obj.name, noHeader });
     }
     return [...sources.values()];
   }
@@ -339,6 +346,11 @@
     return s;
   }
 
+  // Column names for data without a header row: the sheet's column letters, e.g. (1, 3) -> ["B", "C", "D"].
+  function letterHeaders(firstColumn, count) {
+    return Array.from({ length: count }, (_, j) => indexToCol(firstColumn + j));
+  }
+
   // { r1: 0, c1: 0, r2: 8, c2: 3 } -> "A1:D9"
   function toA1(b) {
     const a = indexToCol(b.c1) + (b.r1 + 1);
@@ -441,10 +453,13 @@
   // Lists the SQL references for a picked block, best first. headers: values of the block's first row.
   // taken: lower-cased names of all tables and named ranges (a sheet with such a name can't be referenced by name).
   // cell: { value, format } of a single selected cell, offered as a literal for WHERE clauses.
+  // info.noHeader: the data has no header row (ignored for tables, which always have one).
   function referenceCandidates(info, pick, headers, taken, cell) {
     const block = pick.block;
     if (!block) return { block: null, candidates: [], columns: [] };
-    const columns = normalizeHeaders(headers || []);
+    const noHeader = !!info.noHeader && !pick.table;
+    const columns = noHeader ? letterHeaders(block.c1, block.c2 - block.c1 + 1) : normalizeHeaders(headers || []);
+    const suffix = noHeader ? " noheader" : "";
     const { sel } = info;
     const single = sel.r1 === sel.r2 && sel.c1 === sel.c2;
     const out = [];
@@ -456,25 +471,26 @@
         out.push({ kind: "range", label: address, text: `[${address}]` });
       }
     } else {
-      if (pick.name) out.push({ kind: "name", label: pick.name.name, text: quoteRef(pick.name.name) });
+      if (pick.name) out.push({ kind: "name", label: pick.name.name + suffix, text: quoteRef(pick.name.name + suffix) });
       if (info.used && sameBounds(block, info.used) && !(taken || []).includes(info.sheet.toLowerCase())) {
-        out.push({ kind: "sheet", label: info.sheet, text: quoteRef(info.sheet) });
+        out.push({ kind: "sheet", label: info.sheet + suffix, text: quoteRef(info.sheet + suffix) });
       }
-      const address = `${info.sheet}!${toA1(block)}`;
+      const address = `${info.sheet}!${toA1(block)}${suffix}`;
       out.push({ kind: "range", label: address, text: `[${address}]` });
     }
+    const firstData = noHeader ? block.r1 : block.r1 + 1;
     // Names of the selected columns (all of them only when it's a single column: otherwise that's just "*").
     const c1 = Math.max(sel.c1, block.c1);
     const c2 = Math.min(sel.c2, block.c2);
     const picked = columns.slice(c1 - block.c1, c2 - block.c1 + 1);
-    if (block.r2 > block.r1 && picked.length && (picked.length === 1 || picked.length < columns.length)) {
+    if (block.r2 >= firstData && picked.length && (picked.length === 1 || picked.length < columns.length)) {
       out.push({ kind: picked.length === 1 ? "column" : "columns", label: picked.join(", "), text: picked.map(quoteRef).join(", ") });
     }
-    if (single && sel.r1 > block.r1 && cell) {
+    if (single && sel.r1 >= firstData && cell) {
       const literal = sqlLiteral(cell.value, cell.format);
       if (literal !== null) out.push({ kind: "value", label: literal, text: literal });
     }
-    return { block, candidates: out, columns, rows: block.r2 - block.r1 };
+    return { block, candidates: out, columns, rows: block.r2 - firstData + 1, noHeader };
   }
 
   // ---------------------------------------------------------------- join builder
@@ -520,6 +536,7 @@
     intersects,
     contains,
     toA1,
+    letterHeaders,
     parseNameFormula,
     currentRegion,
     pickReferenceBlock,

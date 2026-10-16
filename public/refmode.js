@@ -16,6 +16,7 @@ const ref = { on: false, timer: null, poll: null, seq: 0, lastAddress: null, che
 function initRefMode() {
   const box = $("refMode");
   box.onchange = () => setRefMode(box.checked).catch((e) => setStatus(errorText(e), "error"));
+  $("refNoHeader").onchange = () => updateRefPreview();
   let saved = false;
   try { saved = localStorage.getItem("sqlRefMode") === "1"; } catch (e) { /* storage unavailable */ }
   if (saved) {
@@ -104,6 +105,7 @@ async function readSelectionRef() {
       tables: tableRanges.map((t) => ({ name: t.name, bounds: boundsOf(t.r) })),
       tableNames: allTables.items.map((t) => t.name.toLowerCase()),
       names: rangeNames.map((n) => ({ name: n.name, ...SqlCore.parseNameFormula(n.formula) })).filter((n) => n.bounds),
+      noHeader: $("refNoHeader").checked,
     };
 
     let pick = SqlCore.pickReferenceBlock(info);
@@ -152,7 +154,8 @@ function renderRefBar(info) {
   text.replaceChildren(
     `${selected} → in `,
     el("b", { textContent: best.label }),
-    ` (${REF_KIND_LABEL[best.kind]}) · ${Math.max(info.rows, 0).toLocaleString()} rows · ${shown}`
+    ` (${REF_KIND_LABEL[best.kind]}) · ${Math.max(info.rows, 0).toLocaleString()} rows · ${shown}`,
+    best.kind === "table" && $("refNoHeader").checked ? " · tables always have a header row, so “No header row” is ignored" : ""
   );
   const prefix = { column: "column ", columns: "columns ", value: "value " };
   info.candidates.forEach((c, i) => {

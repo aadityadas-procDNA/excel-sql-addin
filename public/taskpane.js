@@ -201,6 +201,7 @@ async function readBlock(ctx, ws, rowIndex, columnIndex, rowCount, columnCount, 
 }
 
 // Returns header row, data rows and number formats of the first data rows.
+// Without a header row (src.noHeader) every row is data and the columns are named by their sheet letters.
 async function readSource(ctx, src) {
   const range = sourceRange(ctx, src);
   range.load("rowIndex,columnIndex,rowCount,columnCount");
@@ -208,6 +209,10 @@ async function readSource(ctx, src) {
   if (range.isNullObject) return { headers: [], rows: [], formats: [] };
   const { rowIndex, columnIndex, rowCount, columnCount } = range;
   const ws = range.worksheet;
+  if (src.noHeader) {
+    const all = await readBlock(ctx, ws, rowIndex, columnIndex, rowCount, columnCount, FORMAT_SAMPLE_ROWS);
+    return { headers: SqlCore.letterHeaders(columnIndex, columnCount), rows: all.values, formats: all.formats };
+  }
   const head = await readBlock(ctx, ws, rowIndex, columnIndex, 1, columnCount, 0);
   if (rowCount < 2) return { headers: head.values[0], rows: [], formats: [] };
   const body = await readBlock(ctx, ws, rowIndex + 1, columnIndex, rowCount - 1, columnCount, FORMAT_SAMPLE_ROWS);
@@ -319,7 +324,8 @@ async function executeSql(sql) {
     } catch (e) {
       let msg = "SQL error: " + e.message;
       if (/no such table/i.test(e.message)) {
-        msg += "\nUse an Excel table name, a named range, a sheet name ([Sheet 1]) or a range ([Sheet1!A1:D100]).";
+        msg += "\nUse an Excel table name, a named range, a sheet name ([Sheet 1]) or a range ([Sheet1!A1:D100])." +
+          "\nAdd “ noheader” for data without a header row ([Sheet1!A1:D100 noheader]); tables always have one.";
       }
       throw new Error(msg);
     }
