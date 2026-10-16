@@ -46,7 +46,7 @@ async function boot(wb) {
   const { Office, Excel } = makeOffice(wb);
   Object.assign(w, { Office, Excel, OfficeExtension: { Error: class extends Error {} }, initSqlJs: () => initSqlJs() });
   const ctx = dom.getInternalVMContext();
-  for (const f of ["sqlcore.js", "taskpane.js", "joinbuilder.js", "lookup.js", "autorefresh.js"]) {
+  for (const f of ["sqlcore.js", "taskpane.js", "joinbuilder.js", "lookup.js", "autorefresh.js", "refmode.js"]) {
     new vm.Script(fs.readFileSync(path.join(PUB, f), "utf8"), { filename: f }).runInContext(ctx);
   }
   const g = (expr) => new vm.Script(expr).runInContext(ctx);
@@ -181,6 +181,66 @@ async function boot(wb) {
   await ui.idle();
   assert.match(ui.status(), /Refreshed 2 items/, ui.status());
   step("refresh everything");
+
+  // ---- reference mode
+  const refButtons = () => [...ui.doc.querySelectorAll("#refButtons button")].map((b) => b.textContent);
+  const refInfo = () => ui.$("refInfo").textContent;
+  const pick = async (sheet, address) => {
+    wb.select(wb.worksheets.getItem(sheet), address);
+    await sleep(400);
+    await ui.idle();
+  };
+  ui.$("refMode").checked = true;
+  ui.$("refMode").dispatchEvent(new ui.w.Event("change"));
+  await ui.idle();
+  assert.strictEqual(wb.selectionHandlers.length, 1);
+  assert.strictEqual(ui.$("refBar").hidden, false);
+
+  await pick("Orders", "B3");
+  assert.deepStrictEqual(refButtons(), ["Insert Orders"], refInfo());
+  assert.match(refInfo(), /^Orders \(table\) · 5 rows · OrderId, OrderDate/);
+  const ta = ui.$("sql");
+  ta.value = "SELECT * FROM";
+  ta.setSelectionRange(13, 13);
+  ui.doc.querySelector("#refButtons button").click();
+  assert.strictEqual(ta.value, "SELECT * FROM Orders");
+  step("reference mode: cell inside a table -> table name, inserted at the cursor with a space");
+
+  await pick("Orders", "C1");
+  assert.deepStrictEqual(refButtons(), ["Insert Orders", "Insert column CustomerId"], refInfo());
+  ta.value = "SELECT  FROM Orders";
+  ta.setSelectionRange(7, 7);
+  ui.doc.querySelectorAll("#refButtons button")[1].click();
+  assert.strictEqual(ta.value, "SELECT CustomerId FROM Orders");
+  step("reference mode: header cell offers the column name");
+
+  await pick("Customers", "G3");
+  assert.deepStrictEqual(refButtons(), ["Insert Targets", "Insert [Customers!F1:G4]"], refInfo());
+  step("reference mode: cell inside a named range -> named range");
+
+  const raw = wb.addSheet("Raw Data");
+  raw.write("B2", [["Region", "Amount"], ["N", 1], ["S", 2]]);
+  raw.write("F10", [["note"]]);
+  await pick("Raw Data", "C3");
+  assert.deepStrictEqual(refButtons(), ["Insert [Raw Data!B2:C4]"], refInfo());
+  assert.match(refInfo(), /2 rows · Region, Amount/);
+  await pick("Raw Data", "B2");
+  assert.deepStrictEqual(refButtons(), ["Insert [Raw Data!B2:C4]", "Insert column Region"], refInfo());
+  await pick("Raw Data", "A1:Z99");
+  assert.deepStrictEqual(refButtons(), ["Insert [Raw Data]", "Insert [Raw Data!B2:F10]"], refInfo());
+  await pick("Raw Data", "E7");
+  assert.deepStrictEqual(refButtons(), []);
+  assert.match(refInfo(), /no data here/);
+  await pick("Raw Data", null);
+  assert.match(refInfo(), /single block/);
+  step("reference mode: loose data -> its block as a range, whole sheet, empty cell and multi-area handled");
+
+  ui.$("refMode").checked = false;
+  ui.$("refMode").dispatchEvent(new ui.w.Event("change"));
+  await ui.idle();
+  assert.strictEqual(wb.selectionHandlers.length, 0);
+  assert.strictEqual(ui.$("refBar").hidden, true);
+  step("reference mode off: selection handler removed");
 
   console.log("\nUI tests passed");
   process.exit(0);

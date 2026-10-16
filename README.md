@@ -29,6 +29,16 @@ Uninstall with `.\scripts\uninstall.ps1`.
 - Date-formatted cells become ISO text (`2026-03-14`), so `strftime`, `date()` and text comparisons work.
 - Only the objects a query mentions are loaded, and they are read fresh on every run.
 
+### Pick from sheet (reference mode)
+
+Not sure what to call some cells? Tick **Pick from sheet** above the editor, then select cells in Excel. The pane shows the reference to use, and **Insert** puts it at the editor cursor.
+
+- A cell or range inside an Excel table gives the table name: `Orders`.
+- A cell inside a named range, or a selection that matches one exactly, gives the name: `Targets`.
+- A single cell in loose data expands to its block, like Ctrl+A, and gives `[Sheet1!B2:F40]`. If that block is all the data on the sheet, `[Sheet1]` is offered first.
+- Any other selection gives its range, clipped to the data: `[Sheet1!A1:D200]`.
+- A header cell also offers that column's name, e.g. `[Unit Price]`.
+
 ## Example (sample.xlsx)
 
 ```sql

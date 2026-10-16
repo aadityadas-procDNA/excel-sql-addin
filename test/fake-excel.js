@@ -127,6 +127,8 @@ class Worksheet {
   activate() {}
   get tables() {
     return {
+      items: this.wb.tableList.filter((t) => t.ws === this),
+      load() { return this; },
       add: (range, hasHeaders) => {
         const t = new Table(this.wb, this, "Table" + (this.wb.tableList.length + 1), range.r, range.c, range.rows, range.cols);
         this.wb.tableList.push(t);
@@ -148,8 +150,29 @@ class Workbook {
     this.tableList = [];
     this.nameList = [];
     this.handlers = [];
+    this.selectionHandlers = [];
     this.events = [];
     this.active = null;
+    this.selection = null;
+  }
+  // Test helper: the user selects cells; raises onSelectionChanged like Excel.
+  select(ws, address) {
+    this.active = ws;
+    this.selection = address === null ? null : ws.getRange(address);
+    for (const h of this.selectionHandlers) setTimeout(() => h({}), 0);
+  }
+  getSelectedRange() {
+    if (!this.selection) throw new Error("InvalidSelection: The operation is not supported on multiple areas.");
+    return this.selection;
+  }
+  get onSelectionChanged() {
+    const wb = this;
+    return {
+      add(handler) {
+        wb.selectionHandlers.push(handler);
+        return { context: {}, remove: () => wb.selectionHandlers.splice(wb.selectionHandlers.indexOf(handler), 1) };
+      },
+    };
   }
   addSheet(name) {
     const ws = new Worksheet(this, name, "{sheet-" + (this.sheetList.length + 1) + "}");
@@ -164,7 +187,8 @@ class Workbook {
     return t;
   }
   addName(name, ws, address) {
-    this.nameList.push({ name, type: "Range", visible: true, getRange: () => ws.getRange(address) });
+    const formula = `='${ws.name}'!` + address.replace(/([A-Z]+)(\d+)/g, "$$$1$$$2");
+    this.nameList.push({ name, type: "Range", visible: true, formula, getRange: () => ws.getRange(address) });
   }
   emit(ws, address) {
     const event = { worksheetId: ws.id, address, changeType: "RangeEdited", source: "Local" };

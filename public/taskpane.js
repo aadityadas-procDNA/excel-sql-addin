@@ -1,6 +1,6 @@
 /* global Office, Excel, OfficeExtension, initSqlJs, SqlCore,
    initJoinBuilder, renderJoinBuilder, initLookup, renderLookupForm, renderLookups, refreshLookup,
-   initAutoRefresh, markSelfWrite, rebuildDeps */
+   initAutoRefresh, markSelfWrite, rebuildDeps, initRefMode */
 "use strict";
 
 const SETTING_SAVED = "sqlSavedQueries"; // [{ name, sql }]
@@ -23,6 +23,7 @@ Office.onReady(async (info) => {
   bindUi();
   initJoinBuilder();
   initLookup();
+  initRefMode();
   try {
     $("sql").value = localStorage.getItem("sqlDraft") || "";
   } catch (e) { /* storage unavailable */ }
@@ -108,10 +109,15 @@ function errorText(e) {
   return e && e.message ? e.message : String(e);
 }
 
+// Inserts at the cursor (or over the selected text), adding a space where it would otherwise run into a word.
 function insertAtCursor(text) {
   const ta = $("sql");
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  if (start > 0 && /[\w\]"]/.test(ta.value[start - 1])) text = " " + text;
+  if (end < ta.value.length && /[\w["]/.test(ta.value[end])) text += " ";
   ta.focus();
-  ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, "end");
+  ta.setRangeText(text, start, end, "end");
   ta.dispatchEvent(new Event("input"));
 }
 

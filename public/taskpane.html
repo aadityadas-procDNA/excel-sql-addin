@@ -26,10 +26,15 @@
           <button id="saveBtn" title="Save this query in the workbook">Save</button>
           <button id="clearBtn" title="Clear editor">Clear</button>
           <span class="spacer"></span>
-          <span class="muted small">Ctrl+Enter</span>
+          <label class="small" title="Select cells in the sheet to get the reference to use in SQL">
+            <input type="checkbox" id="refMode"> Pick from sheet</label>
         </div>
         <textarea id="sql" spellcheck="false" autocomplete="off"
-          placeholder="SELECT * FROM Table1 LIMIT 100&#10;&#10;Click an object below to insert its name."></textarea>
+          placeholder="SELECT * FROM Table1 LIMIT 100&#10;&#10;Click an object below, or turn on “Pick from sheet” and select cells, to insert a reference."></textarea>
+        <div id="refBar" class="refbar" hidden>
+          <div id="refInfo" class="small">Select cells in the sheet…</div>
+          <div id="refButtons" class="toolbar wrap"></div>
+        </div>
         <div id="saveRow" class="toolbar" hidden>
           <input id="saveName" placeholder="Query name">
           <button id="saveOk" class="primary">Save</button>
@@ -71,6 +76,7 @@
             <li>Joins, GROUP BY, CTEs (<code>WITH</code>), window functions and multiple statements are supported. The last result set is shown.</li>
             <li>SQL <code>=</code> is case-sensitive. Add <code>COLLATE NOCASE</code> to match like XLOOKUP.</li>
             <li>Select part of the editor text to run just that part.</li>
+            <li>Turn on <b>Pick from sheet</b>, then select cells: the pane shows the matching table, named range, sheet or range reference and inserts it at the cursor. Select a header cell to insert a column name.</li>
           </ul>
         </div>
       </details>
@@ -166,5 +172,6 @@
   <script src="joinbuilder.js"></script>
   <script src="lookup.js"></script>
   <script src="autorefresh.js"></script>
+  <script src="refmode.js"></script>
 </body>
 </html>

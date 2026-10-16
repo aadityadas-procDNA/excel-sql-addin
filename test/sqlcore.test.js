@@ -163,6 +163,84 @@ test("buildJoinSql and guessJoinKey", async () => {
   db.close();
 });
 
+// ---- reference mode
+
+const gridReader = (cell) => {
+  let calls = 0;
+  const read = async (list) => {
+    calls++;
+    return list.map((b) =>
+      Array.from({ length: b.r2 - b.r1 + 1 }, (_, i) => Array.from({ length: b.c2 - b.c1 + 1 }, (_, j) => cell(b.r1 + i, b.c1 + j)))
+    );
+  };
+  return { read, calls: () => calls };
+};
+
+test("currentRegion grows like Ctrl+A, including diagonals, and stops at gaps", async () => {
+  const rows = [
+    "......ZZ",
+    ".AB.....",
+    ".CD.....",
+    "..E.....",
+    "...Y....",
+    "........",
+    "A.......",
+  ];
+  const { read } = gridReader((r, c) => (rows[r] && rows[r][c] !== "." && rows[r][c]) || "");
+  const used = { r1: 0, c1: 0, r2: 6, c2: 7 };
+  assert.deepStrictEqual(await S.currentRegion({ r1: 2, c1: 2, r2: 2, c2: 2 }, used, read), { r1: 1, c1: 1, r2: 4, c2: 3 });
+  assert.deepStrictEqual(await S.currentRegion({ r1: 0, c1: 7, r2: 0, c2: 7 }, used, read), { r1: 0, c1: 6, r2: 0, c2: 7 });
+  assert.strictEqual(await S.currentRegion({ r1: 5, c1: 5, r2: 5, c2: 5 }, used, read), null, "empty cell");
+  assert.strictEqual(await S.currentRegion({ r1: 9, c1: 0, r2: 9, c2: 0 }, used, read), null, "outside used range");
+});
+
+test("currentRegion on a large block needs few reads", async () => {
+  const g = gridReader((r, c) => (r < 5000 && c < 3 ? 1 : ""));
+  const region = await S.currentRegion({ r1: 2500, c1: 1, r2: 2500, c2: 1 }, { r1: 0, c1: 0, r2: 5000, c2: 2 }, g.read);
+  assert.deepStrictEqual(region, { r1: 0, c1: 0, r2: 4999, c2: 2 });
+  assert.ok(g.calls() < 15, "reads: " + g.calls());
+});
+
+test("parseNameFormula", () => {
+  assert.deepStrictEqual(S.parseNameFormula("='My Sheet'!$F$1:$G$4"), { sheet: "My Sheet", bounds: { r1: 0, c1: 5, r2: 3, c2: 6 } });
+  assert.deepStrictEqual(S.parseNameFormula("=Data!$A:$C").bounds, { r1: 0, c1: 0, r2: 1048575, c2: 2 });
+  assert.strictEqual(S.parseNameFormula("=OFFSET(Data!$A$1,0,0,10,2)"), null);
+  assert.strictEqual(S.parseNameFormula("=Data!$A$1,Data!$C$1"), null);
+  assert.strictEqual(S.parseNameFormula("=0.2"), null);
+  assert.strictEqual(S.toA1({ r1: 0, c1: 0, r2: 8, c2: 27 }), "A1:AB9");
+});
+
+test("reference choice: table, named range, sheet, range, column", () => {
+  const B = (a) => S.parseAddress(a)[0];
+  const base = {
+    sheet: "Data 1",
+    used: B("A1:J20"),
+    tables: [{ name: "Orders", bounds: B("A1:C10") }],
+    tableNames: ["orders", "customers"],
+    names: [
+      { name: "Rates", sheet: "Data 1", bounds: B("E1:F5") },
+      { name: "Customers", sheet: "Data 1", bounds: B("H1:H3") }, // shadowed by a table
+    ],
+  };
+  const choose = (sel, region, headers = ["Id", "", "Id"]) => {
+    const info = { ...base, sel: B(sel), region };
+    const pick = S.pickReferenceBlock(info);
+    return pick.needsRegion ? pick : S.referenceCandidates(info, pick, headers, ["orders", "customers", "rates"]);
+  };
+  const texts = (r) => r.candidates.map((c) => `${c.kind}:${c.text}`);
+
+  assert.deepStrictEqual(texts(choose("B5")), ["table:Orders"]);
+  assert.deepStrictEqual(texts(choose("A2:B4")), ["table:Orders"]);
+  assert.deepStrictEqual(texts(choose("C1")), ["table:Orders", "column:Id_2"]);
+  assert.deepStrictEqual(texts(choose("F2")), ["name:Rates", "range:[Data 1!E1:F5]"]);
+  assert.deepStrictEqual(texts(choose("E1:F5")), ["name:Rates", "range:[Data 1!E1:F5]"]);
+  assert.deepStrictEqual(choose("H2"), { needsRegion: true }, "named range shadowed by a table name is skipped");
+  assert.deepStrictEqual(texts(choose("H2", B("H1:J20"))), ["range:[Data 1!H1:J20]"]);
+  assert.deepStrictEqual(texts(choose("A1:Z99")), ["sheet:[Data 1]", "range:[Data 1!A1:J20]"]);
+  assert.deepStrictEqual(texts(choose("H1", B("H1:I4"), ["Region", "Target"])), ["range:[Data 1!H1:I4]", "column:Region"]);
+  assert.deepStrictEqual(choose("Z50", null).candidates, []);
+});
+
 (async () => {
   let failed = 0;
   for (const t of tests) {

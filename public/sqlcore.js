@@ -326,6 +326,135 @@
 
   const intersects = (a, b) => a.r1 <= b.r2 && b.r1 <= a.r2 && a.c1 <= b.c2 && b.c1 <= a.c2;
   const contains = (outer, inner) => outer.r1 <= inner.r1 && inner.r2 <= outer.r2 && outer.c1 <= inner.c1 && inner.c2 <= outer.c2;
+  const sameBounds = (a, b) => a.r1 === b.r1 && a.c1 === b.c1 && a.r2 === b.r2 && a.c2 === b.c2;
+
+  function intersection(a, b) {
+    if (!intersects(a, b)) return null;
+    return { r1: Math.max(a.r1, b.r1), c1: Math.max(a.c1, b.c1), r2: Math.min(a.r2, b.r2), c2: Math.min(a.c2, b.c2) };
+  }
+
+  function indexToCol(c) {
+    let s = "";
+    for (c++; c > 0; c = Math.floor((c - 1) / 26)) s = String.fromCharCode(65 + ((c - 1) % 26)) + s;
+    return s;
+  }
+
+  // { r1: 0, c1: 0, r2: 8, c2: 3 } -> "A1:D9"
+  function toA1(b) {
+    const a = indexToCol(b.c1) + (b.r1 + 1);
+    const z = indexToCol(b.c2) + (b.r2 + 1);
+    return a === z ? a : a + ":" + z;
+  }
+
+  // ---------------------------------------------------------------- reference mode
+
+  // "='My Sheet'!$A$1:$C$9" -> { sheet, bounds }. Formulas, constants and multi-area names give null.
+  function parseNameFormula(formula) {
+    if (typeof formula !== "string") return null;
+    const f = formula.replace(/^=/, "").trim();
+    if (!f.includes("!") || /[(),]/.test(f.replace(/'[^']*'/g, ""))) return null;
+    const { sheet, address } = splitAddress(f);
+    try {
+      return { sheet, bounds: parseAddress(address)[0] };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const filled = (v) => v !== "" && v !== null && v !== undefined;
+
+  // Expands a non-empty cell to its block of data, like Ctrl+A (Excel's "current region"): keeps adding
+  // adjacent rows and columns (diagonals included) that contain a value. Stays inside limits (the used range).
+  // read(boundsList) resolves to one 2D value array per bounds; probes grow geometrically to keep round trips few.
+  async function currentRegion(start, limits, read) {
+    if (!limits || !contains(limits, start)) return null;
+    if (!filled((await read([start]))[0][0][0])) return null;
+    const b = { ...start };
+    let rowStep = 200;
+    let colStep = 20;
+    for (let i = 0; i < 5000; i++) {
+      const c1 = Math.max(b.c1 - 1, limits.c1), c2 = Math.min(b.c2 + 1, limits.c2);
+      const r1 = Math.max(b.r1 - 1, limits.r1), r2 = Math.min(b.r2 + 1, limits.r2);
+      const probes = [];
+      if (b.r2 < limits.r2) probes.push({ side: "down", b: { r1: b.r2 + 1, r2: Math.min(b.r2 + rowStep, limits.r2), c1, c2 } });
+      if (b.r1 > limits.r1) probes.push({ side: "up", b: { r1: Math.max(b.r1 - rowStep, limits.r1), r2: b.r1 - 1, c1, c2 } });
+      if (b.c2 < limits.c2) probes.push({ side: "right", b: { r1, r2, c1: b.c2 + 1, c2: Math.min(b.c2 + colStep, limits.c2) } });
+      if (b.c1 > limits.c1) probes.push({ side: "left", b: { r1, r2, c1: Math.max(b.c1 - colStep, limits.c1), c2: b.c1 - 1 } });
+      if (!probes.length) break;
+
+      const values = await read(probes.map((p) => p.b));
+      let grew = false;
+      probes.forEach((p, k) => {
+        const v = values[k];
+        const rows = v.length;
+        const cols = v[0].length;
+        const rowHas = (r) => v[r].some(filled);
+        const colHas = (c) => v.some((row) => filled(row[c]));
+        let n = 0;
+        if (p.side === "down") { while (n < rows && rowHas(n)) n++; b.r2 += n; }
+        if (p.side === "up") { while (n < rows && rowHas(rows - 1 - n)) n++; b.r1 -= n; }
+        if (p.side === "right") { while (n < cols && colHas(n)) n++; b.c2 += n; }
+        if (p.side === "left") { while (n < cols && colHas(cols - 1 - n)) n++; b.c1 -= n; }
+        if (n) grew = true;
+        const full = p.side === "down" || p.side === "up" ? n === rows : n === cols;
+        if (full && (p.side === "down" || p.side === "up")) rowStep = Math.min(rowStep * 2, Math.max(200, Math.floor(200000 / (c2 - c1 + 1))));
+        if (full && (p.side === "left" || p.side === "right")) colStep = Math.min(colStep * 2, Math.max(20, Math.floor(200000 / (r2 - r1 + 1))));
+      });
+      if (!grew) break;
+    }
+    return b;
+  }
+
+  // Decides which block of cells a selection refers to.
+  // info: { sheet, sel, used, tables: [{ name, bounds }] (this sheet), tableNames: all, lower-cased,
+  //         names: [{ name, sheet, bounds }], region? }
+  // Returns { block, table?, name? }, or { needsRegion: true } when a single loose cell must be expanded first.
+  function pickReferenceBlock(info) {
+    const { sel, used } = info;
+    const single = sel.r1 === sel.r2 && sel.c1 === sel.c2;
+    const table = info.tables.find((t) => contains(t.bounds, sel));
+    if (table) return { block: table.bounds, table };
+
+    // A named range sharing a table's name resolves to the table, so it can't be offered.
+    const tableNames = new Set((info.tableNames || []).concat(info.tables.map((t) => t.name.toLowerCase())));
+    const name = info.names.find(
+      (n) =>
+        n.sheet.toLowerCase() === info.sheet.toLowerCase() &&
+        !tableNames.has(n.name.toLowerCase()) &&
+        (single ? contains(n.bounds, sel) : sameBounds(n.bounds, sel))
+    );
+    if (!used) return { block: null };
+    if (name) return { block: intersection(name.bounds, used), name };
+    if (!single) return { block: intersection(sel, used) };
+    if (info.region === undefined) return { needsRegion: true };
+    return { block: info.region };
+  }
+
+  // Lists the SQL references for a picked block, best first. headers: values of the block's first row.
+  // taken: lower-cased names of all tables and named ranges (a sheet with such a name can't be referenced by name).
+  function referenceCandidates(info, pick, headers, taken) {
+    const block = pick.block;
+    if (!block) return { block: null, candidates: [], columns: [] };
+    const columns = normalizeHeaders(headers || []);
+    const out = [];
+    if (pick.table) {
+      out.push({ kind: "table", label: pick.table.name, text: quoteRef(pick.table.name) });
+    } else {
+      if (pick.name) out.push({ kind: "name", label: pick.name.name, text: quoteRef(pick.name.name) });
+      if (info.used && sameBounds(block, info.used) && !(taken || []).includes(info.sheet.toLowerCase())) {
+        out.push({ kind: "sheet", label: info.sheet, text: quoteRef(info.sheet) });
+      }
+      const address = `${info.sheet}!${toA1(block)}`;
+      out.push({ kind: "range", label: address, text: `[${address}]` });
+    }
+    const { sel } = info;
+    const single = sel.r1 === sel.r2 && sel.c1 === sel.c2;
+    if (single && sel.r1 === block.r1 && block.r2 > block.r1 && columns[sel.c1 - block.c1] !== undefined) {
+      const col = columns[sel.c1 - block.c1];
+      out.push({ kind: "column", label: col, text: quoteRef(col) });
+    }
+    return { block, candidates: out, columns, rows: block.r2 - block.r1 };
+  }
 
   // ---------------------------------------------------------------- join builder
 
@@ -369,6 +498,11 @@
     boundsOf,
     intersects,
     contains,
+    toA1,
+    parseNameFormula,
+    currentRegion,
+    pickReferenceBlock,
+    referenceCandidates,
     buildJoinSql,
     guessJoinKey,
     extractIdentifiers,

@@ -94,6 +94,13 @@ textarea#sql {
   border: 1px solid var(--line); border-radius: 4px; padding: 8px;
 }
 
+.refbar { border: 1px dashed var(--accent); border-radius: 4px; padding: 6px 8px; margin-top: 6px; }
+.refbar #refInfo { color: var(--muted); word-break: break-word; }
+.refbar #refInfo b { color: var(--fg); font-family: var(--mono); font-weight: 600; }
+.refbar .toolbar { margin: 4px 0 0; }
+.refbar .toolbar:empty { display: none; }
+.refbar button { font-family: var(--mono); font-size: 12px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .status {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; max-height: 40vh; overflow: auto;
   padding: 6px 12px; font-size: 12px; color: var(--muted); background: var(--bg); border-top: 1px solid var(--line);
