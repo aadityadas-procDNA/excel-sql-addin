@@ -99,6 +99,70 @@ test("end to end: load tables, join, aggregate, output", async () => {
   db.close();
 });
 
+test("lookup modes match like XLOOKUP, loose and exact", () => {
+  const src = [["C01", "Acme", 10], ["c02 ", "Globex", 20], [123, "Num", 30], ["C01", "Acme dup", 40], ["", "blank", 0]];
+  const target = [["c01"], ["C02"], ["123"], [" 123 "], ["zzz"], [""]];
+
+  const nocase = S.buildLookupIndex(src, [0], "nocase", "first");
+  assert.strictEqual(nocase.duplicates, 1);
+  let r = S.applyLookup(target, nocase.index, [1, 2], "nocase", "#N/A");
+  assert.deepStrictEqual(r.columns[0], ["Acme", "#N/A", "#N/A", "#N/A", "#N/A", ""]);
+  assert.strictEqual(r.matched, 1);
+  assert.strictEqual(r.missing, 4);
+
+  const loose = S.buildLookupIndex(src, [0], "loose", "last");
+  r = S.applyLookup(target, loose.index, [1, 2], "loose", "");
+  assert.deepStrictEqual(r.columns[0], ["Acme dup", "Globex", "Num", "Num", "", ""]);
+  assert.deepStrictEqual(r.columns[1], [40, 20, 30, 30, "", ""]);
+
+  const exact = S.buildLookupIndex(src, [0], "exact", "first");
+  r = S.applyLookup([["C01"], ["c01"]], exact.index, [1], "exact", "none");
+  assert.deepStrictEqual(r.columns[0], ["Acme", "none"]);
+});
+
+test("lookup with composite keys and formula-like text", () => {
+  const src = [["N", 2026, "=bad"], ["N", 2025, "ok"]];
+  const { index } = S.buildLookupIndex(src, [0, 1], "nocase", "first");
+  const r = S.applyLookup([["n", 2026], ["N", 2025], ["N", 2024]], index, [2], "nocase", "");
+  assert.deepStrictEqual(r.columns[0], ["'=bad", "ok", ""]);
+});
+
+test("parseAddress, intersects, contains", () => {
+  assert.deepStrictEqual(S.parseAddress("B2:D9"), [{ r1: 1, r2: 8, c1: 1, c2: 3 }]);
+  assert.deepStrictEqual(S.parseAddress("Sheet1!$A$1"), [{ r1: 0, r2: 0, c1: 0, c2: 0 }]);
+  assert.strictEqual(S.parseAddress("C:E")[0].r2, 1048575);
+  assert.strictEqual(S.parseAddress("3:5")[0].c2, 16383);
+  assert.strictEqual(S.parseAddress("A1,AA10:AB12")[1].c1, 26);
+  const t = S.boundsOf(0, 0, 61, 6);
+  assert.ok(S.intersects(t, S.parseAddress("F61")[0]));
+  assert.ok(!S.intersects(t, S.parseAddress("G1")[0]));
+  assert.ok(S.contains(t, S.parseAddress("B2:C3")[0]));
+  assert.ok(!S.contains(t, S.parseAddress("A:A")[0]));
+});
+
+test("buildJoinSql and guessJoinKey", async () => {
+  assert.deepStrictEqual(S.guessJoinKey(["OrderId", "CustomerId", "Name"], ["customerid", "Name"]), { left: "CustomerId", right: "customerid" });
+  assert.strictEqual(S.guessJoinKey(["a"], ["b"]), null);
+  const sql = S.buildJoinSql({
+    base: { name: "Orders", alias: "a" },
+    joins: [{ type: "LEFT", name: "My Customers", alias: "b", on: [{ leftAlias: "a", leftColumn: "CustomerId", rightColumn: "CustomerId" }] }],
+    columns: [{ alias: "a", column: "OrderId" }, { alias: "b", column: "Name", as: "Name (My Customers)" }],
+    nocase: true,
+    trim: true,
+  });
+  assert.ok(sql.includes("LEFT JOIN [My Customers] AS b"));
+  assert.ok(sql.includes("TRIM(a.CustomerId) = TRIM(b.CustomerId) COLLATE NOCASE"));
+
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  S.loadTable(db, "Orders", S.prepareTable(["OrderId", "CustomerId"], [[1, "c01"], [2, "C02 "], [3, "X"]], []));
+  S.loadTable(db, "My Customers", S.prepareTable(["CustomerId", "Name"], [["C01", "Acme"], ["C02", "Globex"]], []));
+  const res = S.runQuery(db, sql);
+  assert.deepStrictEqual(res.columns, ["OrderId", "Name (My Customers)"]);
+  assert.deepStrictEqual(res.values, [[1, "Acme"], [2, "Globex"], [3, null]]);
+  db.close();
+});
+
 (async () => {
   let failed = 0;
   for (const t of tests) {

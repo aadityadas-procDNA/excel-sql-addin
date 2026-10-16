@@ -43,10 +43,34 @@ GROUP BY c.Region, t.Target
 ORDER BY Revenue DESC;
 ```
 
+## Lookup columns (XLOOKUP replacement)
+
+**Lookup** tab: choose the table to add columns to, where to look values up, the key column(s) and the columns to bring over. The values are written once as plain values, with no formulas recalculating, so this stays fast on large tables.
+
+- **Ignore case** matches like XLOOKUP. **Loose** also ignores extra spaces and matches numbers stored as text (`"123"` = `123`), the usual causes of `#N/A`.
+- Composite keys (several key columns) are supported. You can choose whether duplicates use the first or last match, and what text to show when nothing is found.
+- The status line reports matched, not-found and duplicate-key counts.
+- Number formats (dates, currency) are copied from the source column.
+
+## Join builder
+
+**Join** tab: pick a starting table, then add joins (LEFT / INNER / FULL). Keys are guessed from shared column names, and you choose the columns. It generates SQL that you can run directly or open in the editor. Use the **Ignore case** and **ignore spaces** options to match like XLOOKUP.
+
+## Auto-refresh
+
+**Manage** tab: turn on auto-refresh to update refreshable query tables and lookup columns whenever their source cells change. It runs in a shared runtime, so it keeps working with the pane closed, and the add-in loads automatically with that workbook. Changes made by the add-in itself are ignored, so it can't loop.
+
+Limitations: only cell edits trigger it. Values that change because a formula recalculated do not trigger it; use **Refresh everything** for those.
+
+## Tests
+
+`npm test` runs the SQL and lookup logic tests, plus UI tests. The UI tests drive the real task pane in jsdom against an in-memory fake of the Excel API.
+
 ## Layout
 
 - `public/sqlcore.js`: SQL and data conversion logic (tested by `npm test`)
 - `public/taskpane.*`: task pane UI and Excel I/O
+- `public/lookup.js`, `public/joinbuilder.js`, `public/autorefresh.js`: the features above
 - `server.js`: static HTTPS server on `https://localhost:3021` (loopback only)
 - `manifest.xml`: add-in manifest (ribbon button on the Data tab)
 

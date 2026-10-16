@@ -4,7 +4,7 @@
     "description":  "Excel add-in: run SQL (SQLite) against tables and ranges in the workbook",
     "scripts":  {
                     "start":  "node server.js",
-                    "test":  "node test/sqlcore.test.js"
+                    "test":  "node test/sqlcore.test.js \u0026\u0026 node test/ui.test.js"
                 },
     "keywords":  [
 
@@ -14,5 +14,8 @@
     "type":  "commonjs",
     "dependencies":  {
                          "sql.js":  "^1.15.0"
-                     }
+                     },
+    "devDependencies":  {
+                            "jsdom":  "^26.1.0"
+                        }
 }

@@ -1,4 +1,6 @@
-/* global Office, Excel, OfficeExtension, initSqlJs, SqlCore */
+/* global Office, Excel, OfficeExtension, initSqlJs, SqlCore,
+   initJoinBuilder, renderJoinBuilder, initLookup, renderLookupForm, renderLookups, refreshLookup,
+   initAutoRefresh, markSelfWrite, rebuildDeps */
 "use strict";
 
 const SETTING_SAVED = "sqlSavedQueries"; // [{ name, sql }]
@@ -9,7 +11,7 @@ const FORMAT_SAMPLE_ROWS = 25;
 
 let SQL = null;
 let lastResult = null; // { columns, values, sql }
-let objectCache = []; // described workbook objects for the tree
+let objectCache = []; // described workbook objects: { kind, name, columns, rows, where }
 
 const $ = (id) => document.getElementById(id);
 
@@ -19,6 +21,8 @@ Office.onReady(async (info) => {
     return;
   }
   bindUi();
+  initJoinBuilder();
+  initLookup();
   try {
     $("sql").value = localStorage.getItem("sqlDraft") || "";
   } catch (e) { /* storage unavailable */ }
@@ -28,14 +32,16 @@ Office.onReady(async (info) => {
     setStatus("Could not load the SQLite engine: " + e.message, "error");
     return;
   }
-  renderSaved();
-  renderLinked();
+  renderManage();
   await busy(refreshObjects);
+  await busy(initAutoRefresh);
 });
 
 // ---------------------------------------------------------------- UI wiring
 
 function bindUi() {
+  document.querySelectorAll(".tab").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+
   const ta = $("sql");
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -54,7 +60,7 @@ function bindUi() {
   $("clearBtn").onclick = () => { ta.value = ""; ta.dispatchEvent(new Event("input")); ta.focus(); };
   $("toSheet").onclick = () => busy(() => insertResult("sheet"));
   $("toCell").onclick = () => busy(() => insertResult("cell"));
-  $("refreshAll").onclick = () => busy(refreshAllLinked);
+  $("refreshAll").onclick = () => busy(refreshEverything);
   $("refreshObjects").onclick = (e) => { e.preventDefault(); e.stopPropagation(); busy(refreshObjects); };
   $("filter").oninput = renderObjects;
 
@@ -70,10 +76,15 @@ function bindUi() {
   });
 }
 
+function showTab(name) {
+  document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll("[data-panel]").forEach((p) => (p.hidden = p.dataset.panel !== name));
+}
+
 function setStatus(msg, kind) {
-  const el = $("status");
-  el.textContent = msg || "";
-  el.className = "status" + (kind ? " " + kind : "");
+  const node = $("status");
+  node.textContent = msg || "";
+  node.className = "status" + (kind ? " " + kind : "");
 }
 
 let busyCount = 0;
@@ -104,11 +115,24 @@ function insertAtCursor(text) {
   ta.dispatchEvent(new Event("input"));
 }
 
+function loadIntoEditor(sql) {
+  showTab("query");
+  $("sql").value = sql;
+  $("sql").dispatchEvent(new Event("input"));
+  $("sql").focus();
+}
+
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
   Object.assign(node, props || {});
   for (const c of children) if (c !== null && c !== undefined) node.append(c);
   return node;
+}
+
+function fillSelect(select, options, value) {
+  select.replaceChildren(...options.map((o) => el("option", { value: o.value, textContent: o.label })));
+  if (options.some((o) => o.value === value)) select.value = value;
+  return select.value;
 }
 
 // ---------------------------------------------------------------- workbook objects
@@ -124,6 +148,11 @@ async function listObjects(ctx) {
     ...names.items.filter((n) => n.type === "Range" && n.visible).map((n) => ({ kind: "name", name: n.name })),
     ...sheets.items.map((s) => ({ kind: "sheet", name: s.name })),
   ];
+}
+
+// Finds a workbook object by name (table > named range > sheet), or a "Sheet!A1:B2" range.
+function findObject(name, objs) {
+  return SqlCore.resolveSources([name], objs)[0] || null;
 }
 
 // Range for a source, clipped to the sheet's used area so whole-column references stay small.
@@ -147,30 +176,36 @@ function sourceRange(ctx, src) {
   throw new Error("Unknown source kind " + src.kind);
 }
 
-// Reads a source in chunks. Returns header row, data rows and number formats of the first data rows.
-async function readSource(ctx, src) {
-  const range = sourceRange(ctx, src);
-  range.load("rowIndex,columnIndex,rowCount,columnCount");
-  await ctx.sync();
-  if (range.isNullObject) return { headers: [], rows: [], formats: [] };
-
-  const { rowIndex, columnIndex, rowCount, columnCount } = range;
-  const ws = range.worksheet;
+// Reads a block of cells in chunks. With formatRows > 0 also returns number formats of the first rows.
+async function readBlock(ctx, ws, rowIndex, columnIndex, rowCount, columnCount, formatRows) {
   const step = Math.max(1, Math.floor(CELLS_PER_CHUNK / columnCount));
   const values = [];
   let formats = [];
   for (let r = 0; r < rowCount; r += step) {
     const part = ws.getRangeByIndexes(rowIndex + r, columnIndex, Math.min(step, rowCount - r), columnCount).load("values");
     let fmt = null;
-    if (r === 0 && rowCount > 1) {
-      fmt = ws.getRangeByIndexes(rowIndex + 1, columnIndex, Math.min(FORMAT_SAMPLE_ROWS, rowCount - 1), columnCount);
-      fmt.load("numberFormat");
+    if (r === 0 && formatRows > 0) {
+      fmt = ws.getRangeByIndexes(rowIndex, columnIndex, Math.min(formatRows, rowCount), columnCount).load("numberFormat");
     }
     await ctx.sync();
     for (const row of part.values) values.push(row);
     if (fmt) formats = fmt.numberFormat;
   }
-  return { headers: values[0] || [], rows: values.slice(1), formats };
+  return { values, formats };
+}
+
+// Returns header row, data rows and number formats of the first data rows.
+async function readSource(ctx, src) {
+  const range = sourceRange(ctx, src);
+  range.load("rowIndex,columnIndex,rowCount,columnCount");
+  await ctx.sync();
+  if (range.isNullObject) return { headers: [], rows: [], formats: [] };
+  const { rowIndex, columnIndex, rowCount, columnCount } = range;
+  const ws = range.worksheet;
+  const head = await readBlock(ctx, ws, rowIndex, columnIndex, 1, columnCount, 0);
+  if (rowCount < 2) return { headers: head.values[0], rows: [], formats: [] };
+  const body = await readBlock(ctx, ws, rowIndex + 1, columnIndex, rowCount - 1, columnCount, FORMAT_SAMPLE_ROWS);
+  return { headers: head.values[0], rows: body.values, formats: body.formats };
 }
 
 async function refreshObjects() {
@@ -185,7 +220,7 @@ async function refreshObjects() {
         const ws = t.worksheet.load("name");
         return () => ({ ...o, headers: head.values[0], rows: body.rowCount, where: ws.name });
       }
-      const range = sourceRange(ctx, o);
+      const range = sourceRange(ctx, { ...o, ref: o.name });
       range.load("address,rowCount");
       return () => (range.isNullObject ? { ...o, empty: true } : { ...o, range, rows: range.rowCount - 1, where: range.address });
     });
@@ -202,6 +237,13 @@ async function refreshObjects() {
     });
   });
   renderObjects();
+  renderJoinBuilder();
+  renderLookupForm();
+}
+
+function columnsOf(name) {
+  const o = objectCache.find((x) => x.name === name);
+  return o ? o.columns : [];
 }
 
 function renderObjects() {
@@ -236,8 +278,7 @@ function renderObjects() {
       el("button", {
         className: "icon", textContent: "▶", title: "Preview first 100 rows",
         onclick: () => {
-          $("sql").value = `SELECT *\nFROM ${ref}\nLIMIT 100;`;
-          $("sql").dispatchEvent(new Event("input"));
+          loadIntoEditor(`SELECT *\nFROM ${ref}\nLIMIT 100;`);
           busy(runFromEditor);
         },
       })
@@ -328,26 +369,42 @@ function renderGrid(result) {
 
 // ---------------------------------------------------------------- writing results
 
-async function writeValues(ctx, ws, row0, col0, data) {
+// Writes a 2D block in chunks and records it as our own change (so auto-refresh ignores it).
+// formats: optional per-column number formats (null entries are left alone).
+async function writeValues(ctx, ws, row0, col0, data, formats) {
   const cols = data[0].length;
+  ws.load("name");
+  await ctx.sync();
   const step = Math.max(1, Math.floor(CELLS_PER_CHUNK / cols));
   for (let r = 0; r < data.length; r += step) {
     const chunk = data.slice(r, r + step);
-    ws.getRangeByIndexes(row0 + r, col0, chunk.length, cols).values = chunk;
+    markSelfWrite(ws.name, SqlCore.boundsOf(row0 + r, col0, chunk.length, cols));
+    const range = ws.getRangeByIndexes(row0 + r, col0, chunk.length, cols);
+    if (formats && formats.some((f) => f)) {
+      // Format first, so text such as "001" stays text in "@" columns.
+      formats.forEach((f, c) => {
+        if (f) ws.getRangeByIndexes(row0 + r, col0 + c, chunk.length, 1).numberFormat = chunk.map(() => [f]);
+      });
+    }
+    range.values = chunk;
     await ctx.sync();
   }
 }
 
-async function assertEmpty(ctx, ranges) {
+async function assertEmpty(ctx, ranges, hint) {
   const used = ranges.map((r) => r.getUsedRangeOrNullObject(true).load("address"));
   await ctx.sync();
   const hit = used.find((u) => !u.isNullObject);
-  if (hit) throw new Error(`Not inserted: ${hit.address} already contains data. Select an empty area or use “New sheet”.`);
+  if (hit) throw new Error(`Stopped: ${hit.address} already contains data. ${hint || "Select an empty area or use “New sheet”."}`);
 }
 
-async function uniqueName(existing, base) {
+function uniqueName(existing, base, alwaysNumber = true) {
   const taken = new Set(existing.map((s) => s.toLowerCase()));
-  for (let i = 1; ; i++) if (!taken.has((base + i).toLowerCase())) return base + i;
+  if (!alwaysNumber && !taken.has(base.toLowerCase())) return base;
+  for (let i = alwaysNumber ? 1 : 2; ; i++) {
+    const name = alwaysNumber ? base + i : `${base} ${i}`;
+    if (!taken.has(name.toLowerCase())) return name;
+  }
 }
 
 async function insertResult(mode) {
@@ -362,7 +419,7 @@ async function insertResult(mode) {
     let ws, row0 = 0, col0 = 0;
     if (mode === "sheet") {
       await ctx.sync();
-      ws = wb.worksheets.add(await uniqueName(sheets.items.map((s) => s.name), "Query "));
+      ws = wb.worksheets.add(uniqueName(sheets.items.map((s) => s.name), "Query "));
     } else {
       const cell = wb.getActiveCell().load("rowIndex,columnIndex");
       ws = cell.worksheet;
@@ -377,7 +434,7 @@ async function insertResult(mode) {
     let name = null;
     if (asTable) {
       const t = ws.tables.add(full, true);
-      name = await uniqueName(tables.items.map((x) => x.name), "SQL_Result_");
+      name = uniqueName(tables.items.map((x) => x.name), "SQL_Result_");
       t.name = name;
     }
     if (data.length <= 5000) full.format.autofitColumns();
@@ -397,6 +454,7 @@ async function insertResult(mode) {
     setStatus(`Inserted ${lastResult.values.length.toLocaleString()} rows.`, "ok");
   }
   await refreshObjects();
+  await rebuildDeps();
 }
 
 // ---------------------------------------------------------------- refreshable query tables
@@ -416,15 +474,16 @@ async function refreshLinked(name) {
     await ctx.sync();
     if (t.isNullObject) throw new Error(`Table ${name} no longer exists (renamed or deleted).`);
     const old = t.getRange().load("rowIndex,columnIndex,rowCount,columnCount");
-    const ws = t.worksheet;
+    const ws = t.worksheet.load("name");
     await ctx.sync();
 
     // Cells the table will grow into must be empty.
     const growth = [];
     if (rows > old.rowCount) growth.push(ws.getRangeByIndexes(old.rowIndex + old.rowCount, old.columnIndex, rows - old.rowCount, Math.max(cols, old.columnCount)));
     if (cols > old.columnCount) growth.push(ws.getRangeByIndexes(old.rowIndex, old.columnIndex + old.columnCount, Math.min(rows, old.rowCount), cols - old.columnCount));
-    if (growth.length) await assertEmpty(ctx, growth);
+    if (growth.length) await assertEmpty(ctx, growth, `Table ${name} needs more room to refresh.`);
 
+    markSelfWrite(ws.name, SqlCore.boundsOf(old.rowIndex, old.columnIndex, old.rowCount, old.columnCount));
     const target = ws.getRangeByIndexes(old.rowIndex, old.columnIndex, rows, cols);
     if (Office.context.requirements.isSetSupported("ExcelApi", "1.13")) {
       // Keep the table (and its style); swap its contents and size.
@@ -445,24 +504,34 @@ async function refreshLinked(name) {
   return result.values.length;
 }
 
-async function refreshAllLinked() {
-  const names = Object.keys(getSetting(SETTING_LINKED, {}));
-  if (!names.length) return setStatus("No query tables yet. Insert a result with “Refreshable table” checked.");
+// Refreshes every query table and lookup. Order: query tables first (lookups may read them).
+async function refreshEverything() {
+  const jobs = [
+    ...Object.keys(getSetting(SETTING_LINKED, {})).map((name) => ({ label: name, run: () => refreshLinked(name) })),
+    ...getSetting(SETTING_LOOKUPS, []).map((l) => ({ label: `${l.target} ← ${l.source}`, run: () => refreshLookup(l.id) })),
+  ];
+  if (!jobs.length) return setStatus("Nothing to refresh yet. Insert a refreshable table or add lookup columns.");
   const failures = [];
-  let done = 0;
-  for (const name of names) {
-    setStatus(`Refreshing ${name} (${done + 1}/${names.length})…`);
+  for (const [i, job] of jobs.entries()) {
+    setStatus(`Refreshing ${job.label} (${i + 1}/${jobs.length})…`);
     try {
-      await refreshLinked(name);
-      done++;
+      await job.run();
     } catch (e) {
-      failures.push(`${name}: ${errorText(e)}`);
+      failures.push(`${job.label}: ${errorText(e)}`);
     }
   }
-  renderLinked();
+  renderManage();
   await refreshObjects();
-  if (failures.length) setStatus(`Refreshed ${done} of ${names.length}.\n${failures.join("\n")}`, "error");
-  else setStatus(`Refreshed ${done} query table${done === 1 ? "" : "s"}.`, "ok");
+  await rebuildDeps();
+  const done = jobs.length - failures.length;
+  if (failures.length) setStatus(`Refreshed ${done} of ${jobs.length}.\n${failures.join("\n")}`, "error");
+  else setStatus(`Refreshed ${done} item${done === 1 ? "" : "s"}.`, "ok");
+}
+
+function renderManage() {
+  renderLinked();
+  renderLookups();
+  renderSaved();
 }
 
 function renderLinked() {
@@ -472,7 +541,7 @@ function renderLinked() {
   $("linkedCount").textContent = names.length ? `(${names.length})` : "";
   list.replaceChildren();
   if (!names.length) {
-    list.append(el("li", { className: "muted small", textContent: "None yet." }));
+    list.append(el("li", { className: "muted small", textContent: "None yet. Run a query and insert it with “Refreshable table” checked." }));
     return;
   }
   for (const name of names) {
@@ -502,6 +571,7 @@ function renderLinked() {
               delete all[name];
               await setSetting(SETTING_LINKED, all);
               renderLinked();
+              await rebuildDeps();
             }),
           })
         ),
@@ -523,12 +593,6 @@ async function selectTable(name) {
 }
 
 // ---------------------------------------------------------------- saved queries
-
-function loadIntoEditor(sql) {
-  $("sql").value = sql;
-  $("sql").dispatchEvent(new Event("input"));
-  $("sql").focus();
-}
 
 async function saveCurrentQuery() {
   const name = $("saveName").value.trim();

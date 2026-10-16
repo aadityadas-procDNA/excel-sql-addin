@@ -219,7 +219,158 @@
     return out;
   }
 
+  // ---------------------------------------------------------------- lookups (XLOOKUP replacement)
+
+  const NUMERIC_TEXT = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+
+  // mode: "exact" (case-sensitive), "nocase" (like XLOOKUP), "loose" (nocase + trims spaces + numbers stored as text match numbers)
+  function keyPart(v, mode) {
+    if (isBlank(v)) return null;
+    if (typeof v === "number") return "n" + v;
+    if (typeof v === "boolean") return "b" + v;
+    let s = String(v);
+    if (mode === "loose") {
+      s = s.trim().replace(/\s+/g, " ");
+      if (s === "") return null;
+      if (NUMERIC_TEXT.test(s)) return "n" + Number(s);
+    }
+    if (mode !== "exact") s = s.toLowerCase();
+    return "s" + s;
+  }
+
+  function lookupKey(values, mode) {
+    const parts = values.map((v) => keyPart(v, mode));
+    return parts.includes(null) ? null : parts.join("\u0001");
+  }
+
+  // Index source rows by key. dup: "first" | "last". Returns { index: Map(key -> row), duplicates }.
+  function buildLookupIndex(rows, keyIdx, mode, dup) {
+    const index = new Map();
+    let duplicates = 0;
+    for (const row of rows) {
+      const key = lookupKey(keyIdx.map((i) => row[i]), mode);
+      if (key === null) continue;
+      if (index.has(key)) {
+        duplicates++;
+        if (dup !== "last") continue;
+      }
+      index.set(key, row);
+    }
+    return { index, duplicates };
+  }
+
+  // targetKeys: rows of key values. Returns one output column (array) per valIdx, plus match stats.
+  // Blank keys give blank output; non-blank keys with no match give notFound.
+  function applyLookup(targetKeys, index, valIdx, mode, notFound) {
+    const cols = valIdx.map(() => new Array(targetKeys.length));
+    let matched = 0;
+    let missing = 0;
+    targetKeys.forEach((keys, r) => {
+      const key = lookupKey(keys, mode);
+      const row = key === null ? undefined : index.get(key);
+      if (row) matched++;
+      else if (key !== null) missing++;
+      valIdx.forEach((c, j) => {
+        cols[j][r] = row ? toCell(row[c]) : key === null ? "" : notFound;
+      });
+    });
+    return { columns: cols, matched, missing };
+  }
+
+  // Number format of the first non-blank value in column c (formats aligned with rows).
+  function sampleFormat(rows, formats, c) {
+    for (let r = 0; formats && r < formats.length && r < rows.length; r++) {
+      if (!isBlank(rows[r][c])) return formats[r][c];
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------- A1 addresses (for change tracking)
+
+  const MAX_ROW = 1048575;
+  const MAX_COL = 16383;
+
+  function colToIndex(letters) {
+    let n = 0;
+    for (const ch of letters.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+    return n - 1;
+  }
+
+  function parseCellRef(ref) {
+    const m = /^([A-Z]*)(\d*)$/i.exec(ref.trim());
+    if (!m || (m[1] === "" && m[2] === "")) throw new Error("Bad cell reference: " + ref);
+    const hasC = m[1] !== "";
+    const hasR = m[2] !== "";
+    return {
+      r1: hasR ? Number(m[2]) - 1 : 0,
+      r2: hasR ? Number(m[2]) - 1 : MAX_ROW,
+      c1: hasC ? colToIndex(m[1]) : 0,
+      c2: hasC ? colToIndex(m[1]) : MAX_COL,
+    };
+  }
+
+  // "A1", "B2:D9", "A:C", "3:5", "Sheet1!A1:B2", comma-separated areas -> [{ r1, c1, r2, c2 }] (0-based, inclusive)
+  function parseAddress(address) {
+    return address.split(",").map((area) => {
+      const a = area.slice(area.lastIndexOf("!") + 1).replace(/\$/g, "");
+      const [p1, p2 = p1] = a.split(":");
+      const x = parseCellRef(p1);
+      const y = parseCellRef(p2);
+      return { r1: Math.min(x.r1, y.r1), r2: Math.max(x.r2, y.r2), c1: Math.min(x.c1, y.c1), c2: Math.max(x.c2, y.c2) };
+    });
+  }
+
+  function boundsOf(rowIndex, columnIndex, rowCount, columnCount) {
+    return { r1: rowIndex, c1: columnIndex, r2: rowIndex + rowCount - 1, c2: columnIndex + columnCount - 1 };
+  }
+
+  const intersects = (a, b) => a.r1 <= b.r2 && b.r1 <= a.r2 && a.c1 <= b.c2 && b.c1 <= a.c2;
+  const contains = (outer, inner) => outer.r1 <= inner.r1 && inner.r2 <= outer.r2 && outer.c1 <= inner.c1 && inner.c2 <= outer.c2;
+
+  // ---------------------------------------------------------------- join builder
+
+  // spec: { base: { name, alias }, joins: [{ type, name, alias, on: [{ leftAlias, leftColumn, rightColumn }] }],
+  //         columns: [{ alias, column, as }], nocase, trim }
+  function buildJoinSql(spec) {
+    const key = (alias, col) => {
+      const ref = alias + "." + quoteRef(col);
+      return spec.trim ? `TRIM(${ref})` : ref;
+    };
+    const select = spec.columns.length
+      ? spec.columns
+          .map((c) => `  ${c.alias}.${quoteRef(c.column)}` + (c.as && c.as !== c.column ? ` AS ${quoteRef(c.as)}` : ""))
+          .join(",\n")
+      : "  *";
+    const lines = ["SELECT", select, `FROM ${quoteRef(spec.base.name)} AS ${spec.base.alias}`];
+    for (const j of spec.joins) {
+      const on = j.on
+        .map((k) => `${key(k.leftAlias, k.leftColumn)} = ${key(j.alias, k.rightColumn)}${spec.nocase ? " COLLATE NOCASE" : ""}`)
+        .join("\n   AND ");
+      lines.push(`${j.type} JOIN ${quoteRef(j.name)} AS ${j.alias}`, `    ON ${on}`);
+    }
+    return lines.join("\n") + ";";
+  }
+
+  // Picks the most likely join key between two column lists: shared names, preferring *id/key/code.
+  function guessJoinKey(leftColumns, rightColumns) {
+    const right = new Map(rightColumns.map((c) => [c.toLowerCase(), c]));
+    const shared = leftColumns.filter((c) => right.has(c.toLowerCase()));
+    if (!shared.length) return null;
+    const best = shared.find((c) => /(id|key|code|no|number)$/i.test(c)) || shared[0];
+    return { left: best, right: right.get(best.toLowerCase()) };
+  }
+
   return {
+    buildLookupIndex,
+    applyLookup,
+    lookupKey,
+    sampleFormat,
+    parseAddress,
+    boundsOf,
+    intersects,
+    contains,
+    buildJoinSql,
+    guessJoinKey,
     extractIdentifiers,
     resolveSources,
     splitAddress,

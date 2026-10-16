@@ -10,76 +10,161 @@
   <link rel="stylesheet" href="taskpane.css">
 </head>
 <body>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="query" role="tab">Query</button>
+    <button class="tab" data-tab="join" role="tab">Join</button>
+    <button class="tab" data-tab="lookup" role="tab">Lookup</button>
+    <button class="tab" data-tab="manage" role="tab">Manage</button>
+  </nav>
+
   <main>
-    <section class="editor">
+    <!-- ============================================================ Query -->
+    <div data-panel="query">
+      <section class="editor">
+        <div class="toolbar">
+          <button id="run" class="primary" title="Run (Ctrl+Enter). Runs only the selected text if any.">&#9654; Run</button>
+          <button id="saveBtn" title="Save this query in the workbook">Save</button>
+          <button id="clearBtn" title="Clear editor">Clear</button>
+          <span class="spacer"></span>
+          <span class="muted small">Ctrl+Enter</span>
+        </div>
+        <textarea id="sql" spellcheck="false" autocomplete="off"
+          placeholder="SELECT * FROM Table1 LIMIT 100&#10;&#10;Click an object below to insert its name."></textarea>
+        <div id="saveRow" class="toolbar" hidden>
+          <input id="saveName" placeholder="Query name">
+          <button id="saveOk" class="primary">Save</button>
+          <button id="saveCancel">Cancel</button>
+        </div>
+      </section>
+
+      <section id="resultSection" hidden>
+        <div class="toolbar wrap">
+          <span class="muted small">Insert:</span>
+          <button id="toSheet">New sheet</button>
+          <button id="toCell">At selected cell</button>
+          <label class="small"><input type="checkbox" id="asTable" checked> Refreshable table</label>
+        </div>
+        <div class="grid-wrap"><table id="grid"></table></div>
+        <div id="gridNote" class="muted small"></div>
+      </section>
+
+      <details open>
+        <summary>Workbook objects <button id="refreshObjects" class="icon" title="Refresh">&#10227;</button></summary>
+        <input id="filter" class="filter" placeholder="Filter tables, ranges, sheets, columns">
+        <ul id="objects" class="tree"></ul>
+      </details>
+
+      <details>
+        <summary>Help</summary>
+        <div class="help">
+          <p>Queries run in <b>SQLite</b> against the workbook data each time you run them.</p>
+          <table>
+            <tr><td>Excel table</td><td><code>SELECT * FROM Sales</code></td></tr>
+            <tr><td>Named range</td><td><code>SELECT * FROM MyRange</code></td></tr>
+            <tr><td>Whole sheet</td><td><code>SELECT * FROM [Sheet 1]</code></td></tr>
+            <tr><td>Any range</td><td><code>SELECT * FROM [Sheet1!A1:D200]</code></td></tr>
+            <tr><td>Spaces in names</td><td><code>[Unit Price]</code> or <code>"Unit Price"</code></td></tr>
+          </table>
+          <ul>
+            <li>The first row of a range or sheet is used as column headers.</li>
+            <li>Date cells become ISO text (<code>2024-01-31</code>), so <code>date()</code>, <code>strftime()</code> and text comparisons work.</li>
+            <li>Joins, GROUP BY, CTEs (<code>WITH</code>), window functions and multiple statements are supported. The last result set is shown.</li>
+            <li>SQL <code>=</code> is case-sensitive. Add <code>COLLATE NOCASE</code> to match like XLOOKUP.</li>
+            <li>Select part of the editor text to run just that part.</li>
+          </ul>
+        </div>
+      </details>
+    </div>
+
+    <!-- ============================================================ Join builder -->
+    <div data-panel="join" hidden>
+      <p class="muted small">Combine tables without writing SQL. The builder writes the query; you can run it or open it in the editor.</p>
+      <div class="field">
+        <label for="joinBase">Start with</label>
+        <select id="joinBase"></select>
+        <span class="alias">a</span>
+      </div>
+      <div id="joinList"></div>
+      <div class="toolbar"><button id="joinAdd">+ Join another table</button></div>
+      <div class="toolbar wrap small">
+        <label><input type="checkbox" id="joinNocase" checked> Ignore case in keys</label>
+        <label><input type="checkbox" id="joinTrim"> Ignore leading/trailing spaces</label>
+      </div>
+      <h3>Columns</h3>
+      <div id="joinColumns" class="checklist"></div>
       <div class="toolbar">
-        <button id="run" class="primary" title="Run (Ctrl+Enter). Runs only the selected text if any.">&#9654; Run</button>
-        <button id="saveBtn" title="Save this query in the workbook">Save</button>
-        <button id="clearBtn" title="Clear editor">Clear</button>
+        <button id="joinRun" class="primary">&#9654; Run</button>
+        <button id="joinEdit">Open in editor</button>
+      </div>
+      <pre id="joinPreview" class="sql-preview"></pre>
+    </div>
+
+    <!-- ============================================================ Lookup columns -->
+    <div data-panel="lookup" hidden>
+      <p class="muted small">Adds columns to a table by matching keys in another table. It replaces XLOOKUP: the values are written once (no formulas) and can be refreshed.</p>
+      <div class="field">
+        <label for="lkTarget">Add columns to</label>
+        <select id="lkTarget"></select>
+      </div>
+      <div class="field">
+        <label for="lkSource">Look up in</label>
+        <select id="lkSource"></select>
+      </div>
+      <h3>Match where</h3>
+      <div id="lkKeys"></div>
+      <div class="toolbar"><button id="lkAddKey">+ Add key column</button></div>
+      <h3>Columns to bring <span class="links"><a href="#" id="lkAll">all</a> · <a href="#" id="lkNone">none</a></span></h3>
+      <div id="lkColumns" class="checklist"></div>
+      <div class="field">
+        <label for="lkMode">Matching</label>
+        <select id="lkMode">
+          <option value="nocase">Ignore case (like XLOOKUP)</option>
+          <option value="loose">Loose: ignore case, extra spaces, numbers stored as text</option>
+          <option value="exact">Exact (case-sensitive)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="lkDup">Several matches</label>
+        <select id="lkDup">
+          <option value="first">Use the first match</option>
+          <option value="last">Use the last match</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="lkNotFound">If not found</label>
+        <input id="lkNotFound" type="text" placeholder="leave blank">
+      </div>
+      <div class="toolbar">
+        <label class="small"><input type="checkbox" id="lkKeep" checked> Refreshable</label>
         <span class="spacer"></span>
-        <span class="muted small">Ctrl+Enter</span>
+        <button id="lkApply" class="primary">Add columns</button>
       </div>
-      <textarea id="sql" spellcheck="false" autocomplete="off"
-        placeholder="SELECT * FROM Table1 LIMIT 100&#10;&#10;Click an object below to insert its name."></textarea>
-      <div id="saveRow" class="toolbar" hidden>
-        <input id="saveName" placeholder="Query name">
-        <button id="saveOk" class="primary">Save</button>
-        <button id="saveCancel">Cancel</button>
-      </div>
-    </section>
+    </div>
 
-    <div id="status" class="status" role="status"></div>
+    <!-- ============================================================ Manage -->
+    <div data-panel="manage" hidden>
+      <section class="card">
+        <label class="switch"><input type="checkbox" id="autoRefresh"> <b>Auto-refresh</b></label>
+        <p class="muted small" id="autoNote">When source data changes, refreshable tables and lookup columns update automatically, even with this pane closed. The add-in then loads whenever this workbook opens.</p>
+        <div class="toolbar"><button id="refreshAll">Refresh everything now</button></div>
+      </section>
 
-    <section id="resultSection" hidden>
-      <div class="toolbar wrap">
-        <span class="muted small">Insert:</span>
-        <button id="toSheet">New sheet</button>
-        <button id="toCell">At selected cell</button>
-        <label class="small"><input type="checkbox" id="asTable" checked> Refreshable table</label>
-      </div>
-      <div class="grid-wrap"><table id="grid"></table></div>
-      <div id="gridNote" class="muted small"></div>
-    </section>
-
-    <details open>
-      <summary>Workbook objects <button id="refreshObjects" class="icon" title="Refresh">&#10227;</button></summary>
-      <input id="filter" class="filter" placeholder="Filter tables, ranges, sheets, columns">
-      <ul id="objects" class="tree"></ul>
-    </details>
-
-    <details>
-      <summary>Saved queries <span id="savedCount" class="badge"></span></summary>
-      <ul id="saved" class="list"></ul>
-    </details>
-
-    <details>
-      <summary>Query tables <span id="linkedCount" class="badge"></span></summary>
-      <p class="muted small">Tables inserted with “Refreshable table” remember their query. Refresh re-runs it against current data.</p>
-      <div class="toolbar"><button id="refreshAll">Refresh all</button></div>
+      <h3>Query tables <span id="linkedCount" class="badge"></span></h3>
       <ul id="linked" class="list"></ul>
-    </details>
 
-    <details>
-      <summary>Help</summary>
-      <div class="help">
-        <p>Queries run in <b>SQLite</b> against the workbook data each time you run them.</p>
-        <table>
-          <tr><td>Excel table</td><td><code>SELECT * FROM Sales</code></td></tr>
-          <tr><td>Named range</td><td><code>SELECT * FROM MyRange</code></td></tr>
-          <tr><td>Whole sheet</td><td><code>SELECT * FROM [Sheet 1]</code></td></tr>
-          <tr><td>Any range</td><td><code>SELECT * FROM [Sheet1!A1:D200]</code></td></tr>
-          <tr><td>Spaces in names</td><td><code>[Unit Price]</code> or <code>"Unit Price"</code></td></tr>
-        </table>
-        <ul>
-          <li>The first row of a range or sheet is used as column headers.</li>
-          <li>Date cells become ISO text (<code>2024-01-31</code>), so <code>date()</code>, <code>strftime()</code> and text comparisons work.</li>
-          <li>Joins, GROUP BY, CTEs (<code>WITH</code>), window functions and multiple statements are supported. The last result set is shown.</li>
-          <li>Select part of the editor text to run just that part.</li>
-          <li>TRUE/FALSE become 1/0. Empty cells become NULL.</li>
-        </ul>
-      </div>
-    </details>
+      <h3>Lookup columns <span id="lookupCount" class="badge"></span></h3>
+      <ul id="lookups" class="list"></ul>
+
+      <h3>Saved queries <span id="savedCount" class="badge"></span></h3>
+      <ul id="saved" class="list"></ul>
+    </div>
   </main>
+
+  <div id="status" class="status" role="status"></div>
+
   <script src="taskpane.js"></script>
+  <script src="joinbuilder.js"></script>
+  <script src="lookup.js"></script>
+  <script src="autorefresh.js"></script>
 </body>
 </html>
